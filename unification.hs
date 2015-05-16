@@ -60,15 +60,16 @@ unify (Union t1 t2) (Union t3 t4) subst = do
   (t24, subst'') <- unify t2 t4 subst'
   return (Union t13 t24, subst'')
 unify (TypeVar u) (TypeVar u') subst =
-  if u == u' then
-    return (TypeVar u, subst)
-  else return (TypeVar u, Map.insert u (TypeVar u') subst)
+  case (follow subst (TypeVar u), follow subst (TypeVar u')) of
+    (TypeVar u, TypeVar u') -> return (TypeVar u, Map.insert u (TypeVar u') subst)
+    (TypeVar u, t) -> return (t, Map.insert u t subst)
+    (t, TypeVar u') -> return (t, Map.insert u' t subst)
+    (t, t') -> unify t t' subst
 unify (TypeVar u) t subst =
-  case Map.lookup u subst of
-    Nothing -> return (t, Map.insert u t subst)
-    Just t' -> do
-      (t'', subst') <- unify t t' subst
-      return (t'', Map.insert u t'' subst')
+  case follow subst (TypeVar u) of
+    TypeVar u -> return (t, Map.insert u t subst)
+    t'        -> do (t'', subst') <- unify t t' subst
+                    return (t'', Map.insert u t'' subst')
 unify t (TypeVar u) subst = unify (TypeVar u) t subst
 unify (AllOf ts1) (AllOf ts2) subst =
   return (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
@@ -95,6 +96,24 @@ unifyPairwise types1 types2 subst = do
   (types', subst') <- foldM f ([], subst) types
   return (List.reverse types', subst')
 
+follow :: Substitution -> Type -> Type
+follow subst (TypeVar u) =
+  case Map.lookup u subst of
+    Nothing             -> TypeVar u
+    Just (TypeVar u')   -> if u == u' then TypeVar u'
+                           else follow subst (TypeVar u')
+    Just (Name s types) -> Name s types
+    Just (Array ty) -> Array (follow subst ty)
+    Just (Tuple types) -> Tuple (List.map (follow subst) types)
+    Just (Set ty) -> Set (follow subst ty)
+    Just (Record fields) -> let f (s, ty) = (s, follow subst ty)
+                            in Record (List.map f fields)
+    Just (Arrow tDom tCod) -> Arrow (follow subst tDom) (follow subst tCod)
+    Just (Union t1 t2) -> Union (follow subst t1) (follow subst t2)
+    Just Error -> Error
+    Just (AllOf types) -> AllOf (List.map (follow subst) types)
+follow subst t = t
+  
 unify' :: Type -> Type -> Substitution -> Maybe (Type, Substitution)
 unify' (Name s1 types1) (Name s2 types2) subst =
   if s1 == s2 then
@@ -148,16 +167,17 @@ unify' (Union t1 t2) (Union t3 t4) subst =
         Nothing -> Nothing
     Nothing -> Nothing
 unify' (TypeVar u) (TypeVar u') subst =
-  if u == u' then
-    Just (TypeVar u, subst)
-  else Just (TypeVar u, Map.insert u (TypeVar u') subst)
+  case (follow subst (TypeVar u), follow subst (TypeVar u')) of
+    (TypeVar u, TypeVar u') -> Just (TypeVar u, Map.insert u (TypeVar u') subst)
+    (TypeVar u, t) -> Just (t, Map.insert u t subst)
+    (t, TypeVar u') -> Just (t, Map.insert u' t subst)
+    (t, t') -> unify' t t' subst
 unify' (TypeVar u) t subst =
-  case Map.lookup u subst of
-    Nothing -> Just (t, Map.insert u t subst)
-    Just t' ->
-      case unify' t t' subst of
-        Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
-        Nothing -> Nothing
+  case follow subst (TypeVar u) of
+    TypeVar u -> Just (t, Map.insert u t subst)
+    t'        -> case unify' t t' subst of
+                  Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
+                  Nothing            -> Nothing
 unify' t (TypeVar u) subst = unify' (TypeVar u) t subst
 unify' (AllOf ts1) (AllOf ts2) subst =
   Just (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
