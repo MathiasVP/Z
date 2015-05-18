@@ -84,8 +84,7 @@ unify t1 t2 subst = return (Union t1 t2, subst)
 unifyTypes :: [Type] -> Substitution -> IO (Type, Substitution)
 unifyTypes types subst = do
   t <- mkTypeVar
-  (ty, subst') <- foldM f (t, subst) types
-  return (ty, subst')
+  foldM f (t, subst) types
   where f (ty, subst) ty' = unify ty ty' subst
   
 unifyPairwise :: [Type] -> [Type] -> Substitution -> IO ([Type], Substitution)

@@ -1,7 +1,7 @@
 module TypedAst(module TypedAst, module Ast) where
 import Ast
 
-data TypedDecl = TTypeDecl String Type
+data TypedDecl = TTypeDecl String [String] Type
                | TFunDecl String [String] [TypedMatchExpr] Type TypedStatement
     deriving (Show)
 
@@ -59,7 +59,7 @@ data TypedStatement = TIfStatement TypedExpr TypedStatement (Maybe TypedStatemen
                     | TCompoundStatement [TypedStatement]
                     | TAssignStatement (Either TypedMatchExpr TypedLValueExpr) TypedExpr
                     | TMatchStatement TypedExpr [(TypedMatchExpr, TypedStatement)]
-                    | TReturnStatement (Maybe TypedExpr)
+                    | TReturnStatement TypedExpr
                     | TBreakStatement
                     | TContinueStatement
                     | TDeclStatement TypedDecl

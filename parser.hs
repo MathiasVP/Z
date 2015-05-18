@@ -4,6 +4,7 @@ import Text.Parsec.Indent
 import Control.Applicative hiding (many, (<|>))
 import Control.Monad.State
 import Data.Char
+import Data.Maybe
 import Ast
 
 type IParser a = ParsecT String () (State SourcePos) a
@@ -19,12 +20,15 @@ typeDecl = do
     string "type"
     spaces
     name <- id_
+    typevarsM <- optionMaybe $ char '<' >> spaces' >>
+                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
+                     spaces' <* char '>'
     spaces
     char '='
     spaces
     t <- type_
     spaces
-    return (TypeDecl name t)
+    return (TypeDecl name (fromMaybe [] typevarsM) t)
     
 funDecl :: IParser Decl
 funDecl = withPos $ do
@@ -32,7 +36,9 @@ funDecl = withPos $ do
     spaces'
     name <- id_
     spaces'
-    typevarsM <- optionMaybe $ char '<' >> spaces' >> sepBy1 id_ (spaces' >> char ',' >> spaces') <* spaces' <* char '>'
+    typevarsM <- optionMaybe $ char '<' >> spaces' >>
+                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
+                     spaces' <* char '>'
     spaces'
     args <- sepBy1 matchExpr spaces'
     spaces'
@@ -43,7 +49,7 @@ funDecl = withPos $ do
     sameOrIndented
     s <- block statement
     spaces
-    return $ FunDecl name (maybe [] id typevarsM) args typeM (makeCompound s)
+    return $ FunDecl name (fromMaybe [] typevarsM) args typeM (makeCompound s)
     
 decl = funDecl
    <|> typeDecl
@@ -284,7 +290,7 @@ matchStatement = withPos $ do
 returnStatement = do
     string "return"
     spaces'
-    e <- optionMaybe expr
+    e <- expr
     spaces
     return $ ReturnStatement e
     

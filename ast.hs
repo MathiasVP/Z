@@ -16,7 +16,7 @@ data Type = Name String [Type]
 instance Show Unique where
   show u = "Unique " ++ show (hashUnique u)
 
-data Decl = TypeDecl String Type
+data Decl = TypeDecl String [String] Type
           | FunDecl String [String] [MatchExpr] (Maybe Type) Statement
     deriving (Show)
 
@@ -70,7 +70,7 @@ data Statement = IfStatement Expr Statement (Maybe Statement)
                | CompoundStatement [Statement]
                | AssignStatement (Either MatchExpr LValueExpr) Expr
                | MatchStatement Expr [(MatchExpr, Statement)]
-               | ReturnStatement (Maybe Expr)
+               | ReturnStatement Expr
                | BreakStatement
                | ContinueStatement
                | DeclStatement Decl

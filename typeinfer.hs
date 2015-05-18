@@ -11,7 +11,6 @@ intType = Name "Int" []
 realType = Name "Real" []
 boolType = Name "Bool" []
 stringType = Name "String" []
-voidType = Name "Void" []
 
 mkIntType :: Substitution -> IO (Type, Substitution)
 mkIntType subst = do
@@ -88,8 +87,8 @@ infer decls = do
             return (elem' : list', env', subst')
 
     inferDecl :: Decl -> Env -> Substitution -> IO (TypedDecl, Env, Substitution)
-    inferDecl (TypeDecl name ty) env subst =
-      return (TTypeDecl name ty, env, subst)
+    inferDecl (TypeDecl name targs ty) env subst =
+      return (TTypeDecl name targs ty, env, subst)
 
     inferDecl (FunDecl name tyArgs args retTy statement) env subst = do
       (args', env', subst') <- inferList (inferMatchExpr Nothing) env subst args
@@ -214,7 +213,6 @@ infer decls = do
     inferMatchExpr tm (BoolMatchExpr b) env subst =
       return ((TBoolMatchExpr b, boolType), env, subst)
     
-    inferStatement :: Statement -> Env -> Substitution -> IO (TypedStatement, Env, Substitution)
     inferStatement (IfStatement e s Nothing) env subst = do
       (e', envExpr, substExpr) <- inferExpr e env subst
       (s', envBody, substBody) <- inferStatement s envExpr substExpr
@@ -262,7 +260,8 @@ infer decls = do
       
     inferStatement (AssignStatement (Left me) e) env subst = do
       (e', envExpr, substExpr) <- inferExpr e env subst
-      (me', envMatchExpr, substMatchExpr) <- inferMatchExpr (Just $ typeOf e') me envExpr substExpr
+      (me', envMatchExpr, substMatchExpr) <-
+        inferMatchExpr (Just $ typeOf e') me envExpr substExpr
       return (TAssignStatement (Left me') e', envMatchExpr, substMatchExpr)
       
     inferStatement (AssignStatement (Right lve) e) env subst = do
@@ -282,12 +281,9 @@ infer decls = do
                 (s', env'', subst''') <- inferStatement s env' subst''
                 return ((me', s'), env'', subst''')
                 
-    inferStatement (ReturnStatement (Just e)) env subst = do
+    inferStatement (ReturnStatement e) env subst = do
       (e', env', subst') <- inferExpr e env subst
-      return (TReturnStatement (Just e'), env', subst')
-      
-    inferStatement (ReturnStatement Nothing) env subst =
-      return (TReturnStatement Nothing, env, subst)
+      return (TReturnStatement e', env', subst')
       
     inferStatement BreakStatement env subst =
       return (TBreakStatement, env, subst)
@@ -372,7 +368,6 @@ infer decls = do
                      "' with type '" ++ show expectedType ++ "'."
           return (Error, subst)
       
-    inferExpr :: Expr -> Env -> Substitution -> IO (TypedExpr, Env, Substitution)
     inferExpr (IntExpr n) env subst =
       return ((TIntExpr n, intType), env, subst)
 
@@ -464,7 +459,7 @@ infer decls = do
       (e', env', subst') <- inferExpr e env subst
       case unify' ty (typeOf e') subst' of
         Nothing          -> do putStrLn $ "Couldn't match expected type '" ++ show ty ++
-                                "' with actual type '" ++ show (typeOf e') ++ "'."
+                                          "' with actual type '" ++ show (typeOf e') ++ "'."
                                return (e', env', subst')
         Just (t, subst') -> return (e', env', subst')
       
@@ -525,8 +520,7 @@ infer decls = do
           List.concatMap returns ss
         returns (TMatchStatement _ actions) =
           List.concatMap (returns . snd) actions
-        returns (TReturnStatement (Just te)) = [typeOf te]
-        returns (TReturnStatement Nothing) = [voidType]
+        returns (TReturnStatement te) = [typeOf te]
         returns _ = []
 
     inferLValueExpr tm (VarExpr name) env subst =
@@ -557,7 +551,8 @@ infer decls = do
               putStrLn $ field ++ " is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst)
         t -> do
-          putStrLn $ "Couldn't match expected record type with actual type '" ++ show t ++ "'"
+          putStrLn $ "Couldn't match expected record type with actual type '" ++
+                     show t ++ "'"
           return ((TFieldAccessExpr lve' field, Error), env, subst)
 
     inferLValueExpr _ (ArrayAccessExpr lve e) env subst = do
@@ -598,8 +593,8 @@ infer decls = do
 
     replaceDecl subst td =
       case td of
-        TTypeDecl s t ->
-          TTypeDecl s (replaceType subst t)
+        TTypeDecl s targs t ->
+          TTypeDecl s targs (replaceType subst t)
         TFunDecl name targs args retTy s ->
           TFunDecl name targs (List.map (replaceMatchExpr subst) args)
                               (replaceType subst retTy) (replaceStatement subst s)
@@ -638,11 +633,11 @@ infer decls = do
           let f (tme, ts) = (replaceMatchExpr subst tme, replaceStatement subst ts)
           in TMatchStatement (replaceExpr subst te) (List.map f actions)
         TReturnStatement tem ->
-          TReturnStatement (liftM (replaceExpr subst) tem)
+          TReturnStatement (replaceExpr subst tem)
         TBreakStatement -> TBreakStatement
         TContinueStatement -> TContinueStatement
         TDeclStatement td -> TDeclStatement (replaceDecl subst td)
-        
+
     replaceExpr subst (te, ty) =
       let te' = case te of
                   TIntExpr n -> TIntExpr n
