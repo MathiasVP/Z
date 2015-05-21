@@ -74,7 +74,7 @@ id_ = do
     c <- letter <|> char '_'
     s <- many (alphaNum <|> char '_')
     if elem (c:s) keywords then
-      fail "Invalid identifier"
+      fail ""
     else
       spaces'
     return $ c:s

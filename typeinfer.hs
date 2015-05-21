@@ -238,16 +238,14 @@ infer decls = do
     inferStatement (ForStatement me e s) env subst = do
       (e', envExpr, substExpr) <- inferExpr e env subst
       t <- mkTypeVar
-      (t, subst') <- case unify' (typeOf e') (Array t) substExpr of
-                      Just (Array t', subst') ->
-                        return (t', subst')
-                      Nothing ->
-                        case unify' (typeOf e') (Set t) substExpr of
-                          Just (Set t', subst') -> return (t', subst')
-                          Nothing -> do
-                            putStrLn $ "Error: Cannot iterate over expression of type '" ++
-                                       (show (typeOf e')) ++ "'."
-                            return (Error, substExpr)
+      (t, subst') <- case unify' (typeOf e') (AllOf [Array t, Set t]) substExpr of
+                      Just (_, subst') ->
+                        return (t, subst') --TODO Returning t is okay?
+                                           --Alternative: Extract result from _
+                      Nothing -> do
+                        putStrLn $ "Error: Cannot iterate over expression of type '" ++
+                                   show (typeOf e') ++ "'."
+                        return (Error, substExpr)
       (me', envMatchExpr, substMatchExpr) <- inferMatchExpr (Just t) me envExpr subst'
       (s', envBody, substBody) <- inferStatement s envMatchExpr substMatchExpr
       subst'' <- mergeSubstitution substMatchExpr substBody
@@ -418,42 +416,38 @@ infer decls = do
 
     inferExpr (UnaryMinusExpr e) env subst = do
       (e', env', subst') <- inferExpr e env subst
-      case typeOf e' of
-        Name "Int" [] -> return ((TUnaryMinusExpr e', intType), env', subst')
-        Name "Real" [] -> return ((TUnaryMinusExpr e', realType), env', subst')
-        _ -> do putStrLn $ "Couldn't match expected type 'Int' or 'Real' with actual type '" ++
-                           show (typeOf e') ++ "'."
-                return ((TUnaryMinusExpr e', Error), env, subst)
+      case unify' (typeOf e') (AllOf [intType, realType]) subst' of
+        Just (t, subst'') -> return ((TUnaryMinusExpr e', t), env', subst'')
+        Nothing -> do putStrLn $ "Couldn't match expected type 'Int' or 'Real' with actual type '" ++
+                                 show (typeOf e') ++ "'."
+                      return ((TUnaryMinusExpr e', Error), env, subst)
 
     inferExpr (BangExpr e) env subst = do
       (e', env', subst') <- inferExpr e env subst
-      case typeOf e' of
-        Name "Bool" [] -> return ((TBangExpr e', boolType), env, subst')
-        _ -> do putStrLn $ "Couldn't match expected type 'Bool' with actual type '" ++
-                           show (typeOf e') ++ "'."
-                return ((TBangExpr e', boolType), env', subst')
+      case unify' (typeOf e') boolType subst' of
+        Just (t, subst'') -> return ((TBangExpr e', boolType), env', subst'')
+        Nothing -> do putStrLn $ "Couldn't match expected type 'Bool' with actual type '" ++
+                                 show (typeOf e') ++ "'."
+                      return ((TBangExpr e', boolType), env', subst')
 
     inferExpr (CallExpr f arg) env subst = do
       (f', env', subst') <- inferExpr f env subst
       (arg', env'', subst'') <- inferExpr arg env' subst'
-      case typeOf f' of
-        Arrow tDom tCod -> do
-          case unify' tDom (typeOf arg') subst'' of
-            Just (t, _) ->
-              return ((TCallExpr f' arg', tCod), env'', subst'')
+      tDom <- mkTypeVar
+      tCod <- mkTypeVar
+      case unify' (typeOf f') (Arrow tDom tCod) subst'' of
+        Just(t, subst''') -> do
+          case unify' tDom (typeOf arg') subst''' of
+            Just _ ->
+              return ((TCallExpr f' arg', tCod), env'', subst''')
             Nothing -> do
               putStrLn $ "Couldn't match expected type '" ++ show tDom ++
                          "' with actual type '" ++ show (typeOf arg') ++ "'."
               return ((TCallExpr f' arg', Error), env, subst)
-        TypeVar u -> do
-          tCod <- mkTypeVar
-          let ty = Arrow (typeOf arg') tCod
-          let subst''' = Map.insert u ty subst'' 
-          return ((TCallExpr f' arg', tCod), env'', subst''')
-        _ -> do
-          putStrLn $ "Couldn't match expected type '" ++ show (typeOf arg') ++
-            " -> ???' with actual type '" ++ show (typeOf f') ++ "'."
-          return ((TCallExpr f' arg', Error), env, subst)
+        Nothing -> do
+            putStrLn $ "Couldn't match expected type '" ++ show (Arrow tDom tCod) ++
+                       "' with actual type '" ++ show (typeOf f') ++ "'."
+            return ((TCallExpr f' arg', Error), env, subst) 
 
     inferExpr (TypeConstrainedExpr e ty) env subst = do
       (e', env', subst') <- inferExpr e env subst
@@ -600,17 +594,18 @@ infer decls = do
                               (replaceType subst retTy) (replaceStatement subst s)
 
     replaceMatchExpr subst (tme, ty) =
-      let tme' = case tme of
-                  TTupleMatchExpr tmes ->
-                    TTupleMatchExpr (List.map (replaceMatchExpr subst) tmes)
-                  TListMatchExpr tmes ->
-                    TListMatchExpr (List.map (replaceMatchExpr subst) tmes)
-                  TSetMatchExpr tmes ->
-                    TSetMatchExpr (List.map (replaceMatchExpr subst) tmes)
-                  TRecordMatchExpr fields ->
-                    let f (s, tme) = (s, replaceMatchExpr subst tme)
-                    in TRecordMatchExpr (List.map f fields)
-                  _ -> tme
+      let tme' =
+            case tme of
+              TTupleMatchExpr tmes ->
+                TTupleMatchExpr (List.map (replaceMatchExpr subst) tmes)
+              TListMatchExpr tmes ->
+                TListMatchExpr (List.map (replaceMatchExpr subst) tmes)
+              TSetMatchExpr tmes ->
+                TSetMatchExpr (List.map (replaceMatchExpr subst) tmes)
+              TRecordMatchExpr fields ->
+                let f (s, tme) = (s, replaceMatchExpr subst tme)
+                in TRecordMatchExpr (List.map f fields)
+              _ -> tme
       in (tme', replaceType subst ty)
         
     replaceStatement subst ts =
@@ -639,62 +634,64 @@ infer decls = do
         TDeclStatement td -> TDeclStatement (replaceDecl subst td)
 
     replaceExpr subst (te, ty) =
-      let te' = case te of
-                  TIntExpr n -> TIntExpr n
-                  TRealExpr d -> TRealExpr d
-                  TBoolExpr b -> TBoolExpr b
-                  TStringExpr s -> TStringExpr s
-                  TOrExpr te1 te2 ->
-                    TOrExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TAndExpr te1 te2 ->
-                    TAndExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TEqExpr te1 te2 ->
-                    TEqExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TNeqExpr te1 te2 ->
-                    TNeqExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TLtExpr te1 te2 ->
-                    TLtExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TGtExpr te1 te2 ->
-                    TGtExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TLeExpr te1 te2 ->
-                    TLeExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TGeExpr te1 te2 ->
-                    TGeExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TAddExpr te1 te2 ->
-                    TAddExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TSubExpr te1 te2 ->
-                    TSubExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TMultExpr te1 te2 ->
-                    TMultExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TDivExpr te1 te2 ->
-                    TDivExpr (replaceExpr subst te1) (replaceExpr subst te2)
-                  TUnaryMinusExpr te ->
-                    TUnaryMinusExpr (replaceExpr subst te)
-                  TBangExpr te ->
-                    TBangExpr (replaceExpr subst te)
-                  TCallExpr teFun teArg ->
-                    TCallExpr (replaceExpr subst teFun) (replaceExpr subst teArg)
-                  TListExpr tes ->
-                    TListExpr (List.map (replaceExpr subst) tes)
-                  TTupleExpr tes ->
-                    TTupleExpr (List.map (replaceExpr subst) tes)
-                  TSetExpr tes ->
-                    TSetExpr (List.map (replaceExpr subst) tes)
-                  TRecordExpr fields ->
-                    let f (s, te) = (s, replaceExpr subst te)
-                    in TRecordExpr (List.map f fields)
-                  TLValue tlve -> TLValue (replaceLValueExpr subst tlve)
-                  TLambdaExpr tmes ts ->
-                    TLambdaExpr (List.map (replaceMatchExpr subst) tmes)
-                                (replaceStatement subst ts)
+      let te' =
+            case te of
+              TIntExpr n -> TIntExpr n
+              TRealExpr d -> TRealExpr d
+              TBoolExpr b -> TBoolExpr b
+              TStringExpr s -> TStringExpr s
+              TOrExpr te1 te2 ->
+                TOrExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TAndExpr te1 te2 ->
+                TAndExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TEqExpr te1 te2 ->
+                TEqExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TNeqExpr te1 te2 ->
+                TNeqExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TLtExpr te1 te2 ->
+                TLtExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TGtExpr te1 te2 ->
+                TGtExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TLeExpr te1 te2 ->
+                TLeExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TGeExpr te1 te2 ->
+                TGeExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TAddExpr te1 te2 ->
+                TAddExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TSubExpr te1 te2 ->
+                TSubExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TMultExpr te1 te2 ->
+                TMultExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TDivExpr te1 te2 ->
+                TDivExpr (replaceExpr subst te1) (replaceExpr subst te2)
+              TUnaryMinusExpr te ->
+                TUnaryMinusExpr (replaceExpr subst te)
+              TBangExpr te ->
+                TBangExpr (replaceExpr subst te)
+              TCallExpr teFun teArg ->
+                TCallExpr (replaceExpr subst teFun) (replaceExpr subst teArg)
+              TListExpr tes ->
+                TListExpr (List.map (replaceExpr subst) tes)
+              TTupleExpr tes ->
+                TTupleExpr (List.map (replaceExpr subst) tes)
+              TSetExpr tes ->
+                TSetExpr (List.map (replaceExpr subst) tes)
+              TRecordExpr fields ->
+                let f (s, te) = (s, replaceExpr subst te)
+                in TRecordExpr (List.map f fields)
+              TLValue tlve -> TLValue (replaceLValueExpr subst tlve)
+              TLambdaExpr tmes ts ->
+                TLambdaExpr (List.map (replaceMatchExpr subst) tmes)
+                            (replaceStatement subst ts)
       in (te', replaceType subst ty)
 
     replaceLValueExpr subst (tlve, ty) =
-      let tlve' = case tlve of
-                    TVarExpr s -> TVarExpr s
-                    TFieldAccessExpr tlve s ->
-                      TFieldAccessExpr (replaceLValueExpr subst tlve) s
-                    TArrayAccessExpr tlve te ->
-                      TArrayAccessExpr (replaceLValueExpr subst tlve)
-                                       (replaceExpr subst te)
+      let tlve' =
+            case tlve of
+              TVarExpr s -> TVarExpr s
+              TFieldAccessExpr tlve s ->
+                TFieldAccessExpr (replaceLValueExpr subst tlve) s
+              TArrayAccessExpr tlve te ->
+                TArrayAccessExpr (replaceLValueExpr subst tlve)
+                                 (replaceExpr subst te)
       in (tlve', replaceType subst ty)
