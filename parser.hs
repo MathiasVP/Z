@@ -13,7 +13,7 @@ parse :: SourceName -> Either ParseError [Decl]
 parse input = runIndent "" $ runParserT (many1 (decl <* spaces)) () "" input
     
 spaces' = many (char ' ')
-    
+
 -- Declarations
 typeDecl :: IParser Decl
 typeDecl = do
@@ -210,7 +210,7 @@ ifStatement = withPos $ do
             optionMaybe (block statement)
           Just False -> fail ""
           Nothing -> return Nothing
-  
+
 whileStatement = withPos $ do
     e <- whileHeader
     indented
