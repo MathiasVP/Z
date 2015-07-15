@@ -179,15 +179,23 @@ subtype visited (n1, inst1) (n2, inst2) gr =
             [(dom2, _), (cod2, _)] = List.sort $ lsuc n2 gr
             (b1, v1) = subtype visited (dom1, inst1) (dom2, inst2) gr
             (b2, v2) = subtype v1 (cod2, inst2) (cod1, inst1) gr
+    (Just RecordTag, Just RecordTag) ->
+      Map.foldrWithKey g (True, visited) fields1
+      where fields1 = Map.fromList $ List.map f $ lsuc n1 gr
+            fields2 = Map.fromList $ List.map f $ lsuc n2 gr
+            f (n, RecordEdge s) = (s, n)
+            g s n (b, visited) =
+              if b then (True, visited)
+              else case Map.lookup s fields2 of
+                    Just n' -> subtype visited (n, inst1) (n', inst2) gr
+                    Nothing -> (False, visited)
     (Just _, Just _) -> (False, visited)
 
 main :: IO ()
 main = do
-  let ty1 = Union (Tuple []) (Tuple [Tuple [Name "T" [], Name "T" []], Name "List" [("T", Name "T" [])]])
-  let ty2 = Tuple [Tuple [Name "T" [], Name "T" []], Name "List" [("T", Name "T" [])]]
-  let ty3 = Union (Name "Int" []) (Tuple [Name "Int" [], Name "Int" []])
-  let (gr1, _) = translateDecl "List" ty1 ["T"] empty
-  let (gr2, _) = translateDecl "NEList" ty2 ["T"] gr1
-  let (gr3, _) = translateDecl "TwoInts" ty3 [] gr2
-  putStrLn $ Dot.showDot $ Dot.fglToDot (snd gr3)
-  print $ fst $ subtype Set.empty (8, Map.fromList [("T", 0)]) (1, Map.fromList [("T", 13)]) gr3
+  let ty1 = Tuple [Name "A" [("T", Name "T" [])], Name "A" [("T", Name "T" [])]]
+  let ty2 = Name "B" [("T", Name "T" [])]
+  let (gr1, _) = translateDecl "A" ty1 ["T"] empty
+  let (gr2, _) = translateDecl "B" ty2 ["T"] gr1
+  putStrLn $ Dot.showDot $ Dot.fglToDot (snd gr2)
+  print $ fst $ subtype Set.empty (1, Map.fromList [("T", 0)]) (6, Map.fromList [("T", 0)]) gr2
