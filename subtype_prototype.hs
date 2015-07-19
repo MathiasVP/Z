@@ -48,13 +48,16 @@ type TypeGraph = (Map.Map String G.Node, G.Gr TypeTag GraphEdge)
 type Substitution = Map.Map U.Unique Type
 type Env = Map.Map String Type
 type InstType = (G.Node, Map.Map String G.Node)
-type Visited = Set.Set (InstType, InstType)
+type Assumptions = Set.Set (InstType, InstType)
 
 unify' :: Type -> Type -> Substitution -> Maybe (Type, Substitution)
 unify' = undefined
 
 empty = (Map.fromList [("Int", 0)],
          G.mkGraph [(0, NameTag "Int")] [])
+
+assumptions :: Assumptions
+assumptions = Set.fromList [((0, Map.empty), (0, Map.empty))]
 
 lookupType :: String -> TypeGraph -> Maybe G.Node
 lookupType name (map, _) = Map.lookup name map
@@ -181,122 +184,120 @@ translateDecl name ty args gr =
               where (gr', node) = newNode (NameTag name) gr
             (gr'''', n) = type2graph ty mapt gr'''
 
-subtype :: Visited -> InstType -> InstType -> Substitution -> TypeGraph -> (Bool, Visited, Substitution)
-subtype visited (n1, inst1) (n2, inst2) subst gr =
+subtype :: Assumptions -> InstType -> InstType -> Substitution -> TypeGraph -> (Bool, Assumptions, Substitution)
+subtype assum (n1, inst1) (n2, inst2) subst gr =
   case (lab gr n1, lab gr n2) of
-    (Just ErrorTag, Just _) -> (True, visited, subst)
-    (Just _, Just ErrorTag) -> (True, visited, subst)
+    (Just ErrorTag, Just _) -> (True, assum, subst)
+    (Just _, Just ErrorTag) -> (True, assum, subst)
     (Just (NameDefTag s1 args), Just _) ->
       case lsuc n1 gr of
         [(n, DefEdge)]
           | Map.size inst1 == List.length args ->
-            if Set.member ((n, inst1), (n2, inst2)) visited then (True, visited, subst)
-            else subtype (Set.insert ((n, inst1), (n2, inst2)) visited) (n, inst1) (n2, inst2) subst gr
+            if Set.member ((n, inst1), (n2, inst2)) assum then (True, assum, subst)
+            else subtype (Set.insert ((n, inst1), (n2, inst2)) assum) (n, inst1) (n2, inst2) subst gr
     (Just _, Just (NameDefTag s2 args)) ->
       case lsuc n2 gr of
         [(n, DefEdge)]
           | Map.size inst2 == List.length args ->
-            if Set.member ((n1, inst1), (n, inst2)) visited then (True, visited, subst)
-            else subtype (Set.insert ((n1, inst1), (n, inst2)) visited) (n1, inst1) (n, inst2) subst gr 
+            if Set.member ((n1, inst1), (n, inst2)) assum then (True, assum, subst)
+            else subtype (Set.insert ((n1, inst1), (n, inst2)) assum) (n1, inst1) (n, inst2) subst gr 
     (Just _, Just (NameTag s2)) ->
       case Map.lookup s2 inst2 of
         Just n ->
-          if Set.member ((n1, inst1), (n, Map.empty)) visited then (True, visited, subst)
-          else subtype (Set.insert ((n1, inst1),(n, Map.empty)) visited) (n1, inst1) (n, Map.empty) subst gr
+          if Set.member ((n1, inst1), (n, Map.empty)) assum then (True, assum, subst)
+          else subtype (Set.insert ((n1, inst1),(n, Map.empty)) assum) (n1, inst1) (n, Map.empty) subst gr
         Nothing ->
           case lsuc n2 gr of
-            [] -> (Set.member ((n1, inst1), (n2, inst2)) visited, visited, subst)
+            [] -> (Set.member ((n1, inst1), (n2, inst2)) assum, assum, subst)
             sucs@((n, _):_) ->
-              if Set.member ((n1, inst1),(n, inst2')) visited then (True, visited, subst)
-              else subtype (Set.insert ((n1, inst1),(n, inst2')) visited) (n1, inst1) (n, inst2') subst gr
+              if Set.member ((n1, inst1),(n, inst2')) assum then (True, assum, subst)
+              else subtype (Set.insert ((n1, inst1),(n, inst2')) assum) (n1, inst1) (n, inst2') subst gr
               where inst2' = Map.fromList $ List.map (\(_, InstEdge s n) -> (s, n)) sucs
     (Just (NameTag s1), Just _) ->
       case Map.lookup s1 inst1 of
         Just n ->
-          if Set.member ((n, inst1),(n2, Map.empty)) visited then (True, visited, subst)
-          else subtype (Set.insert ((n, inst1), (n2, Map.empty)) visited) (n, inst1) (n2, Map.empty) subst gr
+          if Set.member ((n, inst1),(n2, Map.empty)) assum then (True, assum, subst)
+          else subtype (Set.insert ((n, inst1), (n2, Map.empty)) assum) (n, inst1) (n2, Map.empty) subst gr
         Nothing ->
           case lsuc n1 gr of
-            [] -> (Set.member ((n1, inst1), (n2, inst2)) visited, visited, subst)
+            [] -> (Set.member ((n1, inst1), (n2, inst2)) assum, assum, subst)
             sucs@((n, _):_) ->
-              if Set.member ((n, inst1'),(n2, inst2)) visited then (True, visited, subst)
-              else subtype (Set.insert ((n, inst1'),(n2, inst2)) visited) (n, inst1') (n2, inst2) subst gr
+              if Set.member ((n, inst1'),(n2, inst2)) assum then (True, assum, subst)
+              else subtype (Set.insert ((n, inst1'),(n2, inst2)) assum) (n, inst1') (n2, inst2) subst gr
               where inst1' = Map.fromList $ List.map (\(_, InstEdge s n) -> (s, n)) sucs
     (Just ArrayTag, Just ArrayTag) ->
       case (lsuc n1 gr, lsuc n2 gr) of
         ([(n1, _)], [(n2, _)]) ->
-          subtype visited (n1, inst1) (n2, inst2) subst gr
+          subtype assum (n1, inst1) (n2, inst2) subst gr
     (Just SetTag, Just SetTag) ->
       case (lsuc n1 gr, lsuc n2 gr) of
         ([(n1, _)], [(n2, _)]) ->
-          subtype visited (n1, inst1) (n2, inst2) subst gr
-    (Just UnionTag, Just UnionTag) -> ((b11 || b12) && (b21 || b22), v4, subst4)
+          subtype assum (n1, inst1) (n2, inst2) subst gr
+    (Just UnionTag, Just UnionTag) -> ((b11 || b12) && (b21 || b22), a4, subst4)
       where [(a, _), (b, _)] = lsuc n1 gr
             [(c, _), (d, _)] = lsuc n2 gr
-            (b11, v1, subst1) = subtype visited (a, inst1) (c, inst2) subst gr
-            (b12, v2, subst2) = subtype v1 (a, inst1) (d, inst2) subst1 gr
-            (b21, v3, subst3) = subtype v2 (b, inst1) (c, inst2) subst2 gr
-            (b22, v4, subst4) = subtype v3 (b, inst1) (d, inst2) subst3 gr
-    (Just _, Just UnionTag) -> (b1 || b2, v2, subst2)
+            (b11, a1, subst1) = subtype assum (a, inst1) (c, inst2) subst gr
+            (b12, a2, subst2) = subtype a1 (a, inst1) (d, inst2) subst1 gr
+            (b21, a3, subst3) = subtype a2 (b, inst1) (c, inst2) subst2 gr
+            (b22, a4, subst4) = subtype a3 (b, inst1) (d, inst2) subst3 gr
+    (Just _, Just UnionTag) -> (b1 || b2, a2, subst2)
       where [(a, _), (b, _)] = lsuc n2 gr
-            (b1, v1, subst1) = subtype visited (n1, inst1) (a, inst2) subst gr
-            (b2, v2, subst2) = subtype v1 (n1, inst1) (b, inst2) subst1 gr
-    (Just UnionTag, Just _) -> (b1 && b2, v2, subst2)
+            (b1, a1, subst1) = subtype assum (n1, inst1) (a, inst2) subst gr
+            (b2, a2, subst2) = subtype a1 (n1, inst1) (b, inst2) subst1 gr
+    (Just UnionTag, Just _) -> (b1 && b2, a2, subst2)
       where [(a, _), (b, _)] = lsuc n1 gr
-            (b1, v1, subst1) = subtype visited (a, inst1) (n2, inst2) subst gr
-            (b2, v2, subst2) = subtype v1 (b, inst1) (n2, inst2) subst1 gr
-    (Just AllOfTag, Just _) -> List.foldl' f (True, visited, subst) nodes
+            (b1, a1, subst1) = subtype assum (a, inst1) (n2, inst2) subst gr
+            (b2, a2, subst2) = subtype a1 (b, inst1) (n2, inst2) subst1 gr
+    (Just AllOfTag, Just _) -> List.foldl' f (True, assum, subst) nodes
       where (nodes, _) = List.unzip $ lsuc n1 gr
-            f (b, visited, subst) node =
-              if b then subtype visited (node, inst1) (n2, inst2) subst gr
-              else (False, visited, subst)
-    (Just _, Just AllOfTag) -> List.foldl' f (True, visited, subst) nodes
+            f (b, assum, subst) node =
+              if b then subtype assum (node, inst1) (n2, inst2) subst gr
+              else (False, assum, subst)
+    (Just _, Just AllOfTag) -> List.foldl' f (True, assum, subst) nodes
       where (nodes, _) = List.unzip $ lsuc n2 gr
-            f (b, visited, subst) node =
-              if b then subtype visited (n1, inst1) (node, inst2) subst gr
-              else (False, visited, subst)
+            f (b, assum, subst) node =
+              if b then subtype assum (n1, inst1) (node, inst2) subst gr
+              else (False, assum, subst)
     (Just (TypeVarTag u), Just _) ->
       case unify' (TypeVar u) (graph2type (n2, inst2) gr) subst of
-        Just (_, subst') -> (True, visited, subst')
-        Nothing -> (False, visited, subst)
+        Just (_, subst') -> (True, assum, subst')
+        Nothing -> (False, assum, subst)
     (Just _, Just (TypeVarTag u)) ->
       case unify' (graph2type (n1, inst1) gr) (TypeVar u) subst of
-        Just (_, subst') -> (True, visited, subst')
-        Nothing -> (False, visited, subst)
+        Just (_, subst') -> (True, assum, subst')
+        Nothing -> (False, assum, subst)
     (Just TupleTag, Just TupleTag)
       | List.length sucs1 == List.length sucs2 ->
-        List.foldl' f (True, visited, subst) (List.zip sucs1 sucs2)
-      | otherwise -> (False, visited, subst)
+        List.foldl' f (True, assum, subst) (List.zip sucs1 sucs2)
+      | otherwise -> (False, assum, subst)
       where sucs1 = List.map fst $ List.sort $ lsuc n1 gr
             sucs2 = List.map fst $ List.sort $ lsuc n2 gr
-            f (b, visited, subst) (n1, n2) =
-              if b then subtype visited (n1, inst1) (n2, inst2) subst gr
-              else (False, visited, subst)
-    (Just ArrowTag, Just ArrowTag) -> (b1 && b2, v2, subst2)
+            f (b, assum, subst) (n1, n2) =
+              if b then subtype assum (n1, inst1) (n2, inst2) subst gr
+              else (False, assum, subst)
+    (Just ArrowTag, Just ArrowTag) -> (b1 && b2, a2, subst2)
       where [(dom1, _), (cod1, _)] = List.sort $ lsuc n1 gr
             [(dom2, _), (cod2, _)] = List.sort $ lsuc n2 gr
-            (b1, v1, subst1) = subtype visited (dom1, inst1) (dom2, inst2) subst gr
-            (b2, v2, subst2) = subtype v1 (cod2, inst2) (cod1, inst1) subst1 gr
+            (b1, a1, subst1) = subtype assum (dom1, inst1) (dom2, inst2) subst gr
+            (b2, a2, subst2) = subtype a1 (cod2, inst2) (cod1, inst1) subst1 gr
     (Just RecordTag, Just RecordTag) ->
-      Map.foldlWithKey g (True, visited, subst) fields1
+      Map.foldlWithKey g (True, assum, subst) fields1
       where fields1 = Map.fromList $ List.map f $ lsuc n1 gr
             fields2 = Map.fromList $ List.map f $ lsuc n2 gr
             f (n, RecordEdge s) = (s, n)
-            g (b, visited, subst) s n =
+            g (b, assum, subst) s n =
               if b then
                 case Map.lookup s fields2 of
-                  Just n' -> subtype visited (n, inst1) (n', inst2) subst gr
-                  Nothing -> (False, visited, subst)
-              else (False, visited, subst)
-    (Just _, Just _) -> (False, visited, subst)
+                  Just n' -> subtype assum (n, inst1) (n', inst2) subst gr
+                  Nothing -> (False, assum, subst)
+              else (False, assum, subst)
+    (Just _, Just _) -> (False, assum, subst)
 
 main :: IO ()
 main = do
-  let ty1 = Union (Tuple []) (Tuple [Name "T" [], Name "List" [("T", Name "T" [])]])
-  let ty2 = Tuple [Name "T" [], Name "List" [("T", Name "T" [])]]
-  let (gr1, n1) = translateDecl "List" ty1 ["T"] empty
-  let (gr2, n2) = translateDecl "NeList" ty2 ["T"] gr1
+  let ty1 = Name "" []
+  --let (gr1, n1) = translateDecl "Int" ty1 ["T"] empty
   --print $ graph2type (n1, Map.fromList [("T", 0)]) gr2
-  --putStrLn $ Dot.showDot $ Dot.fglToDot (snd gr2)
-  let (b, _, _) = subtype Set.empty (7, Map.fromList [("T", 0)]) (1, Map.fromList [("T", 0)]) Map.empty gr2
+  --putStrLn $ Dot.showDot $ Dot.fglToDot (snd gr1)
+  let (b, _, _) = subtype assumptions (0, Map.empty) (0, Map.empty) Map.empty empty
   print $ b
