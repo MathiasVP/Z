@@ -301,14 +301,3 @@ subtype assum (n1, inst1) (n2, inst2) subst gr =
                       Nothing -> (False, assum, subst)
                   else (False, assum, subst)
         (Just _, Just _) -> (False, assum, subst)
-
-main :: IO ()
-main = do
-  let ty1 = Union (Tuple []) (Tuple [Name "T" [], Name "List" [Name "T" []]])
-  let ty2 = Tuple [Name "U" [], Name "List" [Name "U" []]]
-  let ty3 = Union (Tuple []) (Name "Int" [])
-  let (gr1, n1) = translateDecl "List" ty1 ["T"] empty
-  let (gr2, n2) = translateDecl "NeList" ty2 ["U"] gr1
-  let (gr3, n3) = translateDecl "MaybeInt" ty3 [] gr2
-  let (b, _, _) = subtype assumptions (n2, Map.fromList [(0, n3)]) (n1, Map.fromList [(0, n3)]) Map.empty gr3
-  print b
