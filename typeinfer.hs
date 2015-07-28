@@ -432,7 +432,7 @@ infer decls = do
       tCod <- mkTypeVar
       case unify' (typeOf f') (Arrow tDom tCod) subst'' gr'' of
         Just(t, subst''') -> do
-          case unify' tDom (typeOf arg') subst''' gr'' of
+          case unify' (typeOf arg') tDom subst''' gr'' of
             Just _ -> --- TODO: We *really* shouldn't ignore this substitution
               return ((TCallExpr f' arg', tCod), env'', subst''', gr'')
             Nothing -> do
