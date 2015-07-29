@@ -10,7 +10,7 @@ import Ast
 type IParser a = ParsecT String () (State SourcePos) a
 
 parse :: SourceName -> Either ParseError [Decl]
-parse input = runIndent "" $ runParserT (many1 (decl <* spaces)) () "" input
+parse input = runIndent "" $ runParserT (many1 (decl <* spaces) <* eof) () "" input
     
 spaces' = many (char ' ')
 
