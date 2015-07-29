@@ -183,13 +183,12 @@ infer decls = do
     inferMatchExpr tm (TypedMatchExpr me ty) env subst gr = do
       (me', env', subst', gr') <- inferMatchExpr tm me env subst gr
       case unify' ty (typeOf me') subst' gr' of
-        Just (ty'', subst'') ->
-          return (me', env', subst'', gr')
+        Just (ty'', subst'') -> return (me', env', subst'', gr')
         Nothing -> do
           putStrLn $ "Error: Couldn't match expected type '" ++ show ty ++
                      "' with actual type '" ++ show (typeOf me') ++ "'."
           return (me', env, subst, gr)
-        
+
     inferMatchExpr tm (VarMatch name) env subst gr =
       case tm of
         Just t ->
@@ -446,7 +445,7 @@ infer decls = do
 
     inferExpr (TypeConstrainedExpr e ty) env subst gr = do
       (e', env', subst', gr') <- inferExpr e env subst gr
-      case unify' ty (typeOf e') subst' gr' of
+      case unify' (typeOf e') ty subst' gr' of
         Nothing          -> do putStrLn $ "Couldn't match expected type '" ++ show ty ++
                                           "' with actual type '" ++ show (typeOf e') ++ "'."
                                return (e', env', subst', gr')
