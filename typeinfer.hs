@@ -525,35 +525,46 @@ infer decls = do
                 Nothing -> (TypeVar u)
             find subst ty = ty
 
-    inferLValueExpr _ (FieldAccessExpr lve field) env subst gr = do
+    -- TODO: Test this function
+    inferLValueExpr tm (FieldAccessExpr lve field) env subst gr = do
       (lve', env', subst', gr') <- inferLValueExpr Nothing lve env subst gr
-      case typeOf lve' of -- TODO: Replace with a unification
-        Record fields ->
-          case List.find ((field ==) . fst) fields of
-            Just (_, t) ->
-              return ((TFieldAccessExpr lve' field, t), env', subst', gr')
+      case tm of
+        Just t -> do -- Writing to variable
+          (_, subst'') <- unify (typeOf lve') (Record [(field, t)]) subst' gr'
+          return ((TFieldAccessExpr lve' field, t), env', subst'', gr')
+        Nothing -> do -- Reading from variable
+          u <- mkTypeVar
+          case unify' (typeOf lve') (Record [(field, u)]) subst' gr' of
+            Just (_, subst'') ->
+              return ((TFieldAccessExpr lve' field, u), env', subst'', gr')
             Nothing -> do
               putStrLn $ field ++ " is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst, gr)
-        t -> do
-          putStrLn $ "Couldn't match expected record type with actual type '" ++
-                     show t ++ "'"
-          return ((TFieldAccessExpr lve' field, Error), env, subst, gr)
 
-    inferLValueExpr _ (ArrayAccessExpr lve e) env subst gr = do
+    -- TODO: Test this function
+    inferLValueExpr tm (ArrayAccessExpr lve e) env subst gr = do
       (lve', env', subst', gr') <- inferLValueExpr Nothing lve env subst gr
       (e', env'', subst'', gr'') <- inferExpr e env' subst' gr'
-      case (typeOf lve', typeOf e') of --TODO: Replace with unification
-        (Array arrayTy, Name "Int" []) ->
-          return ((TArrayAccessExpr lve' e', arrayTy), env'', subst'', gr'')
-        (Array _, t) -> do
-          putStrLn $ "Couldn't match expected array type 'int' with actual type '" ++
-                     show t ++ "'."
-          return ((TArrayAccessExpr lve' e', t), env'', subst'', gr)
-        (t, _) -> do
-          putStrLn $ "Couldn't match expected array type with with actual type '" ++
-                     show t ++ "'."
-          return ((TArrayAccessExpr lve' e', t), env'', subst, gr)
+      case tm of
+        Just t -> do -- Writing to variable
+          (_, subst''') <- unify (typeOf lve') (Array t) subst'' gr''
+          (_, subst'''') <- unify (typeOf e') intType subst''' gr''
+          return ((TArrayAccessExpr lve' e', t), env'', subst'''', gr'')
+        Nothing -> do -- Reading from variable
+          arrayTy <- mkTypeVar
+          case unify' (typeOf lve') (Array arrayTy) subst'' gr'' of
+            Just (_, subst''') ->
+              case unify' (typeOf e') intType subst''' gr'' of
+                Just (_, subst'''') ->
+                  return ((TArrayAccessExpr lve' e', arrayTy), env'', subst'''', gr'')
+                Nothing -> do
+                  putStrLn $ "Couldn't match expected type '" ++ (show intType) ++
+                             "' with actual type '" ++ show (typeOf e') ++ "'."
+                  return ((TArrayAccessExpr lve' e', Error), env'', subst, gr)
+            Nothing -> do
+              putStrLn $ "Couldn't match expected array type with with actual type '" ++
+                         show (Array arrayTy) ++ "'."
+              return ((TArrayAccessExpr lve' e', Error), env'', subst, gr)
   
     replaceType subst ty =
       case ty of

@@ -272,15 +272,7 @@ data GraphEdge
   | NumEdge Int
   | RecordEdge String
   | InstEdge Int G.Node
-  deriving (Show, Eq)
-  
-instance Ord GraphEdge where
-  DefEdge `compare` DefEdge = EQ
-  NumEdge n `compare` NumEdge m = n `compare` m
-  RecordEdge s1 `compare` RecordEdge s2 = s1 `compare` s2
-  InstEdge n n1 `compare` InstEdge m n2
-    | n == m    = n1 `compare` n2
-    | otherwise = n `compare` m
+  deriving (Show, Eq, Ord)
              
 type TypeGraph = (Map.Map String G.Node, Map.Map G.Node String, G.Gr TypeTag GraphEdge, Map.Map String (Map.Map String Int))
 type InstType = (G.Node, Map.Map Int G.Node)
@@ -422,6 +414,7 @@ translateTypeDecl name ty args gr =
               where (gr', node) = newNode (NameTag name) gr
             (gr'''', n) = type2graph ty mapt gr'''
 
+-- Should be much *much* simpler than this
 assumption :: InstType -> InstType -> TypeGraph -> Assumptions -> Bool
 assumption t1@(n1, ts1) t2@(n2, ts2) gr assum
   | Set.member (t1, t2) assum = True
@@ -468,7 +461,7 @@ subtype' map1 map2 (n1, inst1) (n2, inst2) subst gr =
                 [] -> (assumption (n1, inst1) (n2, inst2) gr assum, assum, subst)
                 sucs@((n, _):_) ->
                   if assumption (n1, inst1) (n, inst2') gr assum then (True, assum, subst)
-                  else subtype'' (Set.insert ((n1, inst1),(n, inst2')) assum) (n1, inst1) (n, inst2') subst
+                  else subtype'' (Set.insert ((n1, inst1), (n, inst2')) assum) (n1, inst1) (n, inst2') subst
                   where inst2' = Map.fromList $ List.map (\(_, InstEdge s n) -> (s, n)) sucs
         (Just (NameTag s1), Just _) ->
           case Map.lookup s1 map1 of
