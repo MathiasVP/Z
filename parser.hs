@@ -11,7 +11,7 @@ type IParser a = ParsecT String () (State SourcePos) a
 
 parse :: SourceName -> Either ParseError [Decl]
 parse input = runIndent "" $ runParserT (many1 (decl <* spaces) <* eof) () "" input
-    
+
 spaces' = many (char ' ')
 
 -- Declarations
@@ -165,7 +165,7 @@ statement = try ifStatement
 
 makeCompound [s] = s
 makeCompound s = CompoundStatement s
-       
+
 ifStatement = withPos $ do
     e <- ifHeader
     indented
@@ -382,7 +382,7 @@ bangExpr = parseBangExpr
       
 callExpr :: IParser Expr
 callExpr = chainl1 primaryExpr (return CallExpr)
-        
+
 primaryExpr :: IParser Expr
 primaryExpr = do
     e <- primaryExpr'
@@ -438,7 +438,7 @@ bool = trueExpr
           string "False"
           spaces'
           return False
-    
+
 string_ :: IParser String
 string_ = do
     char '"'
@@ -446,7 +446,7 @@ string_ = do
     char '"'
     spaces'
     return s
-    
+
 listExpr :: IParser Expr
 listExpr = do
     char '['
@@ -495,7 +495,7 @@ lvalueExpr = do
     name <- id_
     fs <- many (dot <|> brackets)
     spaces'
-    return $ foldl (\e f -> f e) (VarExpr name) fs
+    return $ foldl (flip ($)) (VarExpr name) fs
   where dot = do
             char '.'
             spaces'

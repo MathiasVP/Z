@@ -3,11 +3,12 @@ import qualified Data.Unique as U
 import qualified Data.List as List
 import qualified Data.Set as Set
 import qualified Data.Map as Map
+import qualified Data.Graph.Inductive as G
+import Data.Maybe as Maybe
 import Control.Monad
+import Data.Ord
 import Ast
 import TypedAst
-import qualified Data.Graph.Inductive as G
-import Data.Ord
 import qualified Debug.Trace as Debug
 
 type Substitution = Map.Map U.Unique Type
@@ -445,71 +446,98 @@ subtype' map1 map2 (n1, inst1) (n2, inst2) subst gr =
           case lsuc n1 gr of
             [(n, DefEdge)] ->
               if assumption (n, inst1) (n2, inst2) gr assum then (True, assum, subst)
-              else subtype'' (Set.insert ((n, inst1), (n2, inst2)) assum) (n, inst1) (n2, inst2) subst
+              else subtype'' assum (n, inst1) (n2, inst2) subst
         (Just _, Just (NameDefTag s2 args)) ->
           case lsuc n2 gr of
             [(n, DefEdge)] ->
               if assumption (n1, inst1) (n, inst2) gr assum then (True, assum, subst)
-              else subtype'' (Set.insert ((n1, inst1), (n, inst2)) assum) (n1, inst1) (n, inst2) subst
+              else subtype'' assum (n1, inst1) (n, inst2) subst
         (Just _, Just (NameTag s2)) ->
           case Map.lookup s2 map2 of
             Just n ->
               if assumption (n1, inst1) (n, inst2) gr assum then (True, assum, subst)
-              else subtype'' (Set.insert ((n1, inst1), (n, inst2)) assum) (n1, inst1) (n, inst2) subst
+              else subtype'' assum (n1, inst1) (n, inst2) subst
             Nothing ->
               case lsuc n2 gr of
                 [] -> (assumption (n1, inst1) (n2, inst2) gr assum, assum, subst)
                 sucs@((n, _):_) ->
                   if assumption (n1, inst1) (n, inst2') gr assum then (True, assum, subst)
-                  else subtype'' (Set.insert ((n1, inst1), (n, inst2')) assum) (n1, inst1) (n, inst2') subst
+                  else subtype'' assum (n1, inst1) (n, inst2') subst
                   where inst2' = Map.fromList $ List.map (\(_, InstEdge s n) -> (s, n)) sucs
         (Just (NameTag s1), Just _) ->
           case Map.lookup s1 map1 of
             Just n ->
               if assumption (n, inst1) (n2, inst2) gr assum then (True, assum, subst)
-              else subtype'' (Set.insert ((n, inst1), (n2, inst2)) assum) (n, inst1) (n2, inst2) subst
+              else subtype'' assum (n, inst1) (n2, inst2) subst
             Nothing ->
               case lsuc n1 gr of
                 [] -> (assumption (n1, inst1) (n2, inst2) gr assum, assum, subst)
                 sucs@((n, _):_) ->
                   if assumption (n, inst1') (n2, inst2) gr assum then (True, assum, subst)
-                  else subtype'' (Set.insert ((n, inst1'), (n2, inst2)) assum) (n, inst1') (n2, inst2) subst
+                  else subtype'' assum (n, inst1') (n2, inst2) subst
                   where inst1' = Map.fromList $ List.map (\(_, InstEdge s n) -> (s, n)) sucs
         (Just ArrayTag, Just ArrayTag) ->
           case (lsuc n1 gr, lsuc n2 gr) of
-            ([(n1, _)], [(n2, _)]) ->
-              subtype'' assum (n1, inst1) (n2, inst2) subst
+            ([(n1', _)], [(n2', _)]) ->
+              if assumption (n1', inst1) (n2', inst2) gr assum then (True, assum, subst)
+              else subtype'' (Set.insert ((n1, inst1), (n2, inst2)) assum) (n1', inst1) (n2', inst2) subst
         (Just SetTag, Just SetTag) ->
           case (lsuc n1 gr, lsuc n2 gr) of
-            ([(n1, _)], [(n2, _)]) ->
-              subtype'' assum (n1, inst1) (n2, inst2) subst
-        (Just UnionTag, Just UnionTag) -> ((b11 || b12) && (b21 || b22), a4, subst4)
-          {-TODO:
-            We shouldn't use the substitution from one subtype''
-            call in the next subtype'' calls -}
-          where [(a, _), (b, _)] = lsuc n1 gr
-                [(c, _), (d, _)] = lsuc n2 gr
-                (b11, a1, subst1) = subtype'' assum (a, inst1) (c, inst2) subst
-                (b12, a2, subst2) = subtype'' a1 (a, inst1) (d, inst2) subst1
-                (b21, a3, subst3) = subtype'' a2 (b, inst1) (c, inst2) subst2
-                (b22, a4, subst4) = subtype'' a3 (b, inst1) (d, inst2) subst3
+            ([(n1', _)], [(n2', _)]) ->
+              if assumption (n1', inst1) (n2', inst2) gr assum then (True, assum, subst)
+              else subtype'' (Set.insert ((n1, inst1), (n2, inst2)) assum) (n1', inst1) (n2', inst2) subst
+        (Just UnionTag, Just UnionTag) ->
+          case List.filter (\(b, _, _) -> b) choices of
+            [] -> (False, assum, subst)
+            x:_ -> x
+          where [(n11, _), (n12, _)] = lsuc n1 gr
+                [(n21, _), (n22, _)] = lsuc n2 gr
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
+                choices = Maybe.catMaybes [f n12 n21 n11 n21, f n12 n22 n11 n12,
+                                           f n12 n21 n11 n22, f n12 n22 n11 n22]
+                f a b c d =
+                  if b1 && b2 then Just (True, a2, subst2)
+                  else Nothing
+                  where
+                    (b1, a1, subst1) =
+                      if assumption (a, inst1) (b, inst2) gr assum' then (True, assum', subst)
+                      else subtype'' assum' (a, inst1) (b, inst2) subst
+                    (b2, a2, subst2) =
+                      if assumption (c, inst1) (d, inst2) gr a1 then (True, a1, subst1)
+                      else subtype'' a1 (c, inst1) (d, inst2) subst1
         (Just _, Just UnionTag) -> (b1 || b2, a2, Map.unionWith Union subst1 subst2)
           where [(a, _), (b, _)] = lsuc n2 gr
-                (b1, a1, subst1) = subtype'' assum (n1, inst1) (a, inst2) subst
-                (b2, a2, subst2) = subtype'' assum (n1, inst1) (b, inst2) subst
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
+                (b1, a1, subst1) =
+                  if assumption (n1, inst1) (a, inst2) gr assum then (True, assum, subst)
+                  else subtype'' assum' (n1, inst1) (a, inst2) subst
+                (b2, a2, subst2) =
+                  if assumption (n1, inst1) (b, inst2) gr assum then (True, assum, subst)
+                  else subtype'' assum' (n1, inst1) (b, inst2) subst
         (Just UnionTag, Just _) -> (b1 && b2, a2, Map.unionWith Union subst1 subst2)
           where [(a, _), (b, _)] = lsuc n1 gr
-                (b1, a1, subst1) = subtype'' assum (a, inst1) (n2, inst2) subst
-                (b2, a2, subst2) = subtype'' assum (b, inst1) (n2, inst2) subst
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
+                (b1, a1, subst1) =
+                  if assumption (a, inst1) (n2, inst2) gr assum then (True, assum, subst)
+                  else subtype'' assum' (a, inst1) (n2, inst2) subst
+                (b2, a2, subst2) =
+                  if assumption (b, inst1) (n2, inst2) gr assum then (True, assum, subst)
+                  else subtype'' assum' (b, inst1) (n2, inst2) subst
         (Just AllOfTag, Just _) -> List.foldl' f (True, assum, subst) nodes
           where (nodes, _) = List.unzip $ lsuc n1 gr
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
                 f (b, assum, subst) node =
-                  if b then subtype'' assum (node, inst1) (n2, inst2) subst
+                  if b then
+                    if assumption (node, inst1) (n2, inst2) gr assum then (True, assum, subst)
+                    else subtype'' assum' (node, inst1) (n2, inst2) subst
                   else (False, assum, subst)
         (Just _, Just AllOfTag) -> List.foldl' f (True, assum, subst) nodes
           where (nodes, _) = List.unzip $ lsuc n2 gr
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
                 f (b, assum, subst) node =
-                  if b then subtype'' assum (n1, inst1) (node, inst2) subst
+                  if b then
+                    if assumption (n1, inst1) (node, inst2) gr assum then (True, assum, subst)
+                    else subtype'' assum' (n1, inst1) (node, inst2) subst
                   else (False, assum, subst)
         (Just (TypeVarTag u), Just _) ->
           case unify' (TypeVar u) (graph2type map2 (n2, inst2) gr) subst gr of
@@ -525,23 +553,34 @@ subtype' map1 map2 (n1, inst1) (n2, inst2) subst gr =
           | otherwise -> (False, assum, subst)
           where sucs1 = List.map fst $ List.sort $ lsuc n1 gr
                 sucs2 = List.map fst $ List.sort $ lsuc n2 gr
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
                 f (b, assum, subst) (n1, n2) =
-                  if b then subtype'' assum (n1, inst1) (n2, inst2) subst
+                  if b then
+                    if assumption (n1, inst1) (n2, inst2) gr assum then (True, assum, subst)
+                    else subtype'' assum' (n1, inst1) (n2, inst2) subst
                   else (False, assum, subst)
         (Just ArrowTag, Just ArrowTag) -> (b1 && b2, a2, subst2)
           where [(dom1, _), (cod1, _)] = List.sort $ lsuc n1 gr
                 [(dom2, _), (cod2, _)] = List.sort $ lsuc n2 gr
-                (b1, a1, subst1) = subtype'' assum (dom1, inst1) (dom2, inst2) subst
-                (b2, a2, subst2) = subtype'' a1 (cod2, inst2) (cod1, inst1) subst1
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
+                (b1, a1, subst1) =
+                  if assumption (dom1, inst1) (dom2, inst2) gr assum then (True, assum, subst)
+                  else subtype'' assum' (dom1, inst1) (dom2, inst2) subst
+                (b2, a2, subst2) =
+                  if assumption (cod2, inst2) (cod1, inst1) gr a1 then (True, a1, subst1)
+                  else subtype'' a1 (cod2, inst2) (cod1, inst1) subst1
         (Just RecordTag, Just RecordTag) ->
           Map.foldlWithKey g (True, assum, subst) fields1
           where fields1 = Map.fromList $ List.map f $ lsuc n1 gr
                 fields2 = Map.fromList $ List.map f $ lsuc n2 gr
+                assum' = Set.insert ((n1, inst1), (n2, inst2)) assum
                 f (n, RecordEdge s) = (s, n)
                 g (b, assum, subst) s n =
                   if b then
                     case Map.lookup s fields2 of
-                      Just n' -> subtype'' assum (n, inst1) (n', inst2) subst
+                      Just n' ->
+                        if assumption (n, inst1) (n', inst2) gr assum then (True, assum, subst)
+                        else subtype'' assum' (n, inst1) (n', inst2) subst
                       Nothing -> (False, assum, subst)
                   else (False, assum, subst)
         (Just _, Just _) -> (False, assum, subst)
