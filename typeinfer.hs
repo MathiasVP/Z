@@ -73,10 +73,10 @@ infer decls = do
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
       (retTy'', subst''') <- mergeReturns statement' env''' argOrd subst''
       let globEnv = Map.insert name (mkArrowType types retTy'') env
-      case unify' retTy' retTy'' env'' argOrd'' subst''' of
-        Just (retTy, subst) ->
-          return (TFunDecl name tyArgs args' retTy statement', globEnv, argOrd, subst)
-        Nothing -> do
+      case subtype retTy'' retTy' env'' argOrd'' subst''' of
+        (True, subst) ->
+          return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
+        (False, _) -> do
           putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy ++
                      "' with actual type '" ++ show retTy' ++ "'."
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
@@ -409,10 +409,10 @@ infer decls = do
       tCod <- mkTypeVar
       case unify' (typeOf f') (Arrow tDom tCod) env'' argOrd'' subst''  of
         Just(t, subst''') ->
-          case unify' (typeOf arg') tDom env'' argOrd'' subst'''  of
-            Just _ -> --- TODO: We *really* shouldn't ignore this substitution
+          case subtype (typeOf arg') tDom env'' argOrd'' subst'''  of
+            (True, _) -> --- TODO: We *really* shouldn't ignore this substitution
               return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
-            Nothing -> do
+            (False, _) -> do
               putStrLn $ "Couldn't match expected type '" ++ show tDom ++
                          "' with actual type '" ++ show (typeOf arg') ++ "'."
               return ((TCallExpr f' arg', Error), env, argOrd'', subst)

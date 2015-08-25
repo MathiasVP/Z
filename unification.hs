@@ -321,11 +321,22 @@ variance env argOrd t s =
       var trace v _ = v
   in var Set.empty Bottom t
 
+subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> (Bool, Substitution)
+subtype t1 t2 env argOrd subst = subtype' env subst argOrd (t1, Map.empty) (t2, Map.empty)
+
 subtype' :: Env -> Substitution -> ArgOrd -> (Type, Bindings) -> (Type, Bindings) -> (Bool, Substitution)
 subtype' env subst argOrd (t1, bind1) (t2, bind2) =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
+    sub assum subst t1 t2@(TypeVar u) =
+      case follow subst t2 of
+        TypeVar u -> (True, Map.insert u t1 subst)
+        ty -> sub assum subst t1 ty
+    sub assum subst t1@(TypeVar u) t2 =
+      case follow subst t1 of
+        TypeVar u -> (True, Map.insert u t2 subst)
+        ty -> sub assum subst ty t2
     sub assum subst (Name s1 tys1) (Name s2 tys2) =
       case Map.lookup (s1, s2) assum of
         Just (tys1', tys2') ->
@@ -355,14 +366,6 @@ subtype' env subst argOrd (t1, bind1) (t2, bind2) =
              f _ (False, subst) = (False, subst)
     sub assum subst (Name s tys) ty = sub assum subst (lookup bind1 env s) ty
     sub assum subst ty (Name s tys) = sub assum subst ty (lookup bind2 env s)
-    sub assum subst (TypeVar u) ty =
-      case unify' (TypeVar u) ty env argOrd subst of
-        Just (_, subst') -> (True, subst')
-        Nothing -> (False, subst)
-    sub assum subst ty (TypeVar u) =
-      case unify' (TypeVar u) ty env argOrd subst of
-        Just (_, subst') -> (True, subst')
-        Nothing -> (False, subst)
     sub assum subst (Union t11 t12) (Union t21 t22) =
       let (b1121, subst1121) = sub assum subst t11 t21
           (b1221, subst1221) = sub assum subst1121 t12 t21
