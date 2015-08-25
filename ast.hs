@@ -1,16 +1,22 @@
 module Ast where
 import Data.Unique
 
-data Type = Name String [Type]
-          | Array Type
-          | Tuple [Type]
-          | Set Type
-          | Record [(String, Type)]
-          | Arrow Type Type
-          | Union Type Type
-          | TypeVar Unique
-          | Error
-          | AllOf [Type]
+data Type
+  = IntType
+  | BoolType
+  | StringType
+  | RealType
+  
+  | Name String [Type]
+  | Array Type
+  | Tuple [Type]
+  | Set Type
+  | Record [(String, Type)]
+  | Arrow Type Type
+  | Union Type Type
+  | TypeVar Unique
+  | Error
+  | AllOf [Type]
     deriving (Show, Eq, Ord)
     
 instance Show Unique where

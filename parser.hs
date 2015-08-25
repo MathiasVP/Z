@@ -132,9 +132,14 @@ recordType = do
 nameType :: IParser Type
 nameType = do
     name <- id_
+    let t = if name == "Int" then Just IntType
+            else if name == "Bool" then Just BoolType
+            else if name == "Real" then Just RealType
+            else if name == "String" then Just StringType
+            else Nothing
     tys <- option [] (char '<' >> sepBy1 type_ (spaces' >> char ',' >> spaces') <* char '>')
     spaces
-    return $ Name name tys
+    return $ fromMaybe (Name name tys) t
 
 arrowType :: IParser Type
 arrowType = chainr1 simpleType arrow
