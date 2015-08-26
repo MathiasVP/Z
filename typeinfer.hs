@@ -1,5 +1,6 @@
 module TypeInfer where
 import qualified Data.List as List
+import Data.Map (Map)
 import qualified Data.Map as Map
 import Control.Monad
 import TypedAst
@@ -9,6 +10,10 @@ import Data.Ord
 
 mkArrowType :: [Type] -> Type -> Type
 mkArrowType types retTy = List.foldr Arrow retTy types
+
+makeForall :: Type -> Type -> Type
+makeForall (TypeVar u) ty = Forall u ty
+makeForall _ ty = ty
 
 mkAllOfType :: Env -> ArgOrd -> Substitution -> [Type] -> IO (Type, Substitution)
 mkAllOfType env argOrd subst types = do
@@ -25,6 +30,11 @@ equalRecordFields fields1 fields2 =
 
 exprOf = fst
 typeOf = snd
+
+foldlWithKeyM :: Monad m => (a -> k -> b -> m a) -> a -> Map k b -> m a
+foldlWithKeyM f acc = Map.foldlWithKey f' (return acc) 
+    where
+        f' ma k b = ma >>= \a -> f a k b
 
 mergeSubstitution :: Env -> ArgOrd -> Substitution -> Substitution -> IO Substitution
 mergeSubstitution env argOrd subst1 subst2 = foldlWithKeyM f subst1 subst2
@@ -64,21 +74,22 @@ infer decls = do
     inferDecl :: Decl -> Env -> ArgOrd -> Substitution -> IO (TypedDecl, Env, ArgOrd, Substitution)
     inferDecl (TypeDecl name targs ty) env argOrd subst =
       return (TTypeDecl name targs ty, Map.insert name ty env, extendArgOrd name targs argOrd, subst)
-
+      
     inferDecl (FunDecl name tyArgs args retTy statement) env argOrd subst = do
       (args', env', argOrd', subst') <- inferList (inferMatchExpr Nothing) env argOrd subst args
       retTy' <- Maybe.fromMaybe mkTypeVar (liftM return retTy)
       let types = List.map snd args'
-      let env'' = Map.insert name (mkArrowType types retTy') env'
+      let functionTy = List.foldr makeForall (mkArrowType types retTy') types
+      let env'' = Map.insert name functionTy env'
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
-      (retTy'', subst''') <- mergeReturns statement' env''' argOrd subst''
-      let globEnv = Map.insert name (mkArrowType types retTy'') env
-      case subtype retTy'' retTy' env'' argOrd'' subst''' of
+      (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
+      let globEnv = Map.insert name functionTy env
+      case subtype infRetTy retTy' env'' argOrd'' subst''' of
         (True, subst) ->
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
         (False, _) -> do
-          putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy ++
-                     "' with actual type '" ++ show retTy' ++ "'."
+          putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
+                     "' with actual type '" ++ show infRetTy ++ "'."
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
 
     inferMatchExpr tm (TupleMatchExpr mes) env argOrd subst = do
@@ -410,8 +421,8 @@ infer decls = do
       case unify' (typeOf f') (Arrow tDom tCod) env'' argOrd'' subst''  of
         Just(t, subst''') ->
           case subtype (typeOf arg') tDom env'' argOrd'' subst'''  of
-            (True, _) -> --- TODO: We *really* shouldn't ignore this substitution
-              return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
+            (True, subst'''') -> do
+              return ((TCallExpr f' arg', tCod), env'', argOrd'', subst'''')
             (False, _) -> do
               putStrLn $ "Couldn't match expected type '" ++ show tDom ++
                          "' with actual type '" ++ show (typeOf arg') ++ "'."
@@ -543,6 +554,10 @@ infer decls = do
   
     replaceType subst ty =
       case ty of
+        IntType -> IntType
+        BoolType -> BoolType
+        StringType -> StringType
+        RealType -> RealType
         Name s types -> Name s (List.map (replaceType subst) types)
         Array ty -> Array (replaceType subst ty)
         Tuple [ty] -> replaceType subst ty
@@ -553,6 +568,9 @@ infer decls = do
                          in Record (List.map f fields)
         Arrow tDom tCod -> Arrow (replaceType subst tDom) (replaceType subst tCod)
         Union t1 t2 -> Union (replaceType subst t1) (replaceType subst t2)
+        Forall u ty -> case replaceType subst (TypeVar u) of
+                         TypeVar u' -> Forall u' (replaceType subst ty)
+                         _ -> (replaceType subst ty)
         TypeVar u -> case Map.lookup u subst of
                       Just (TypeVar u') -> if u == u' then
                                             TypeVar u'

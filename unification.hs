@@ -18,82 +18,15 @@ mkTypeVar :: IO Type
 mkTypeVar = U.newUnique >>=
               return . TypeVar
 
-unify :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
-unify (TypeVar u) (TypeVar u') env argOrd subst =
-  case (follow subst (TypeVar u), follow subst (TypeVar u')) of
-    (TypeVar u, TypeVar u') -> return (TypeVar u, Map.insert u (TypeVar u') subst)
-    (TypeVar u, t) -> return (t, Map.insert u t subst)
-    (t, TypeVar u') -> return (t, Map.insert u' t subst)
-    (t, t') -> unify t t' env argOrd subst 
-unify (TypeVar u) t env argOrd subst =
-  case follow subst (TypeVar u) of
-    TypeVar u -> return (t, Map.insert u t subst)
-    t'        -> do (t'', subst') <- unify t t' env argOrd subst 
-                    return (t'', Map.insert u t'' subst')
-unify t (TypeVar u) env argOrd subst = unify (TypeVar u) t env argOrd subst
-unify t1@(Name s1 types1) t2@(Name s2 types2) env argOrd subst =
-  case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
-    (True, subst') -> return (t1, subst') --TODO: Or t2?
-    (False, _) -> return (Union t1 t2, subst)
-  where bind1 = makeBindings argOrd s1 types1
-        bind2 = makeBindings argOrd s2 types2
-unify t1@(Name s types) t2 env argOrd subst =
-  case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
-    (True, subst') -> return (t1, subst') --TODO: Or t2?
-    (False, _) -> return (Union t1 t2, subst)
-  where bind = makeBindings argOrd s types
-unify t1 t2@(Name s types) env argOrd subst =
-  case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
-    (True, subst') -> return (t1, subst') --TODO: Or t2?
-    (False, _) -> return (Union t1 t2, subst)
-  where bind = makeBindings argOrd s types
-unify (Array t1) (Array t2) env argOrd subst = do
-  (t, subst') <- unify t1 t2 env argOrd subst 
-  return (Array t, subst')
-unify (Tuple [t1]) (Tuple [t2]) env argOrd subst = do
-  (t, subst') <- unify t1 t2 env argOrd subst 
-  return (Tuple [t], subst')
-unify (Tuple [t1]) t2 env argOrd subst = do
-  (t, subst') <- unify t1 t2 env argOrd subst 
-  return (t, subst')
-unify t1 (Tuple [t2]) env argOrd subst = do
-  (t, subst') <- unify t1 t2 env argOrd subst 
-  return (t, subst')
-unify (Tuple types1) (Tuple types2) env argOrd subst =
-  if List.length types1 == List.length types2 then do
-    (types, subst') <- unifyPairwise types1 types2 env argOrd subst 
-    return (Tuple types, subst')
-  else return (Union (Tuple types1) (Tuple types2), subst)
-unify (Set t1) (Set t2) env argOrd subst = do
-  (t, subst') <- unify t1 t2 env argOrd subst 
-  return (Set t, subst')
-unify (Record fields1) (Record fields2) env argOrd subst = do
-  (types, subst') <- unifyPairwise types1 types2 env argOrd subst
-  let fields = List.zip names1 types
-  if names1 == names2 then
-    return (Record fields, subst')
-  else return (Union (Record fields1) (Record fields2), subst)
-  where fields1' = List.sortBy (comparing fst) fields1
-        fields2' = List.sortBy (comparing fst) fields2
-        (names1, types1) = List.unzip fields1'
-        (names2, types2) = List.unzip fields2'
-unify (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) env argOrd subst = do
-  (tyDom, subst') <- unify tyDom1 tyDom2 env argOrd subst 
-  (tyCod, subst'') <- unify tyCod1 tyCod2 env argOrd subst' 
-  return (Arrow tyDom tyCod, subst'')
-unify (Union t1 t2) (Union t3 t4) env argOrd subst = do
-  (t13, subst') <- unify t1 t3 env argOrd subst 
-  (t24, subst'') <- unify t2 t4 env argOrd subst' 
-  return (Union t13 t24, subst'')
-unify (AllOf ts1) (AllOf ts2) env argOrd subst =
-  return (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-unify (AllOf ts) t env argOrd subst =
-  if Set.member t (Set.fromList ts) then
-    return (t, subst)
-  else
-    return (Union (AllOf ts) t, subst)
-unify t (AllOf ts) env argOrd subst = unify (AllOf ts) t env argOrd subst 
-unify t1 t2 env argOrd subst = return (Union t1 t2, subst)
+generalize :: U.Unique -> Substitution -> Substitution
+generalize u subst =
+  case Map.lookup u subst of
+    Just (TypeVar u') -> generalize u' (Map.delete u subst)
+    Just ty -> Map.delete u subst
+    Nothing -> subst
+
+makeBindings :: ArgOrd -> String -> [Type] -> Bindings
+makeBindings argOrd s types = Map.fromList $ List.zip (Map.elems (argOrd ! s)) types
 
 unifyTypes :: [Type] -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
 unifyTypes types env argOrd subst = do
@@ -124,114 +57,213 @@ follow subst (TypeVar u) =
                             in Record (List.map f fields)
     Just (Arrow tDom tCod) -> Arrow (follow subst tDom) (follow subst tCod)
     Just (Union t1 t2) -> Union (follow subst t1) (follow subst t2)
+    Just (Forall u ty) -> Forall u (follow subst ty)
     Just Error -> Error
     Just (AllOf types) -> AllOf (List.map (follow subst) types)
 follow subst t = t
 
-makeBindings :: ArgOrd -> String -> [Type] -> Bindings
-makeBindings argOrd s types = Map.fromList $ List.zip (Map.elems (argOrd ! s)) types
-
+unify :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
+unify t1 t2 env argOrd subst =
+  let
+    uni (TypeVar u) (TypeVar u') subst =
+      case (follow subst (TypeVar u), follow subst (TypeVar u')) of
+        (TypeVar u, TypeVar u') ->
+          return (TypeVar u, Map.insert u (TypeVar u') subst)
+        (TypeVar u, t) ->
+          return (t, Map.insert u t subst)
+        (t, TypeVar u') ->
+          return (t, Map.insert u' t subst)
+        (t, t') -> uni t t' subst
+    uni (Forall u t1) t2 subst = do
+      (ty, subst') <- uni t1 t2 subst
+      return (ty, generalize u subst')
+    uni t1 (Forall u t2) subst = do
+      (ty, subst') <- uni t1 t2 subst
+      return (ty, generalize u subst')
+    uni (TypeVar u) t subst =
+      case follow subst (TypeVar u) of
+        TypeVar u -> return (t, Map.insert u t subst)
+        t'        -> do (t'', subst') <- uni t t' subst 
+                        return (t'', Map.insert u t'' subst')
+    uni t (TypeVar u) subst = uni (TypeVar u) t subst
+    uni t1@(Name s1 types1) t2@(Name s2 types2) subst =
+      case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
+        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (False, _) -> return (Union t1 t2, subst)
+      where bind1 = makeBindings argOrd s1 types1
+            bind2 = makeBindings argOrd s2 types2
+    uni t1@(Name s types) t2 subst =
+      case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
+        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (False, _) -> return (Union t1 t2, subst)
+      where bind = makeBindings argOrd s types
+    uni t1 t2@(Name s types) subst =
+      case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
+        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (False, _) -> return (Union t1 t2, subst)
+      where bind = makeBindings argOrd s types
+    uni (Array t1) (Array t2) subst = do
+      (t, subst') <- uni t1 t2 subst 
+      return (Array t, subst')
+    uni (Tuple [t1]) (Tuple [t2]) subst = do
+      (t, subst') <- uni t1 t2 subst 
+      return (Tuple [t], subst')
+    uni (Tuple [t1]) t2 subst = do
+      (t, subst') <- uni t1 t2 subst 
+      return (t, subst')
+    uni t1 (Tuple [t2]) subst = do
+      (t, subst') <- uni t1 t2 subst 
+      return (t, subst')
+    uni (Tuple types1) (Tuple types2) subst =
+      if List.length types1 == List.length types2 then do
+        (types, subst') <- unifyPairwise types1 types2 env argOrd subst 
+        return (Tuple types, subst')
+      else return (Union (Tuple types1) (Tuple types2), subst)
+    uni (Set t1) (Set t2) subst = do
+      (t, subst') <- uni t1 t2 subst 
+      return (Set t, subst')
+    uni (Record fields1) (Record fields2) subst = do
+      (types, subst') <- unifyPairwise types1 types2 env argOrd subst
+      let fields = List.zip names1 types
+      if names1 == names2 then
+        return (Record fields, subst')
+      else return (Union (Record fields1) (Record fields2), subst)
+      where fields1' = List.sortBy (comparing fst) fields1
+            fields2' = List.sortBy (comparing fst) fields2
+            (names1, types1) = List.unzip fields1'
+            (names2, types2) = List.unzip fields2'
+    uni (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
+      (tyDom, subst') <- uni tyDom1 tyDom2 subst 
+      (tyCod, subst'') <- uni tyCod1 tyCod2 subst' 
+      return (Arrow tyDom tyCod, subst'')
+    uni (Union t1 t2) (Union t3 t4) subst = do -- This is incorrect.
+      (t13, subst') <- uni t1 t3 subst         -- The correct version
+      (t24, subst'') <- uni t2 t4 subst'       -- should be like in subtype
+      return (Union t13 t24, subst'')
+    uni (AllOf ts1) (AllOf ts2) subst =
+      return (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
+    uni (AllOf ts) t subst =
+      if Set.member t (Set.fromList ts) then
+        return (t, subst)
+      else return (Union (AllOf ts) t, subst)
+    uni t (AllOf ts) subst = uni (AllOf ts) t subst
+    uni IntType IntType subst = return (IntType, subst)
+    uni RealType RealType subst = return (RealType, subst)
+    uni StringType StringType subst = return (StringType, subst)
+    uni BoolType BoolType subst = return (BoolType, subst)
+    uni t1 t2 subst = return (Union t1 t2, subst)
+  in uni t1 t2 subst
 
 unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> Maybe (Type, Substitution)
-unify' (TypeVar u) (TypeVar u') env argOrd subst =
-  case (follow subst (TypeVar u), follow subst (TypeVar u')) of
-    (TypeVar u, TypeVar u') -> Just (TypeVar u, Map.insert u (TypeVar u') subst)
-    (TypeVar u, t) -> Just (t, Map.insert u t subst)
-    (t, TypeVar u') -> Just (t, Map.insert u' t subst)
-    (t, t') -> unify' t t' env argOrd subst
-unify' (TypeVar u) t env argOrd subst =
-  case follow subst (TypeVar u) of
-    TypeVar u -> Just (t, Map.insert u t subst)
-    t'        -> case unify' t' t env argOrd subst of
-                  Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
-                  Nothing            -> Nothing
-unify' t (TypeVar u) env argOrd subst =
-  case follow subst (TypeVar u) of
-    TypeVar u -> Just (t, Map.insert u t subst)
-    t'        -> case unify' t t' env argOrd subst of
-                  Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
-                  Nothing            -> Nothing
-unify' t1@(Name s1 types1) (Name s2 types2) env argOrd subst =
-  case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
-    (True, subst') -> Just (t1, subst') --TODO: Or t2?
-    (False, _) -> Nothing
-  where bind1 = makeBindings argOrd s1 types1
-        bind2 = makeBindings argOrd s2 types2
-unify' t1@(Name s types) t2 env argOrd subst =
-  case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
-    (True, subst') -> Just (t1, subst') --TODO: Or t2?
-    (False, _) -> Nothing
-  where bind = makeBindings argOrd s types
-unify' t1 t2@(Name s types) env argOrd subst =
-  case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
-    (True, subst') -> Just (t1, subst') --TODO: Or t2?
-    (False, _) -> Nothing
-  where bind = makeBindings argOrd s types
-unify' (Array t1) (Array t2) env argOrd subst =
-  case unify' t1 t2 env argOrd subst of
-    Just (t, subst') -> Just (Array t, subst')
-    Nothing -> Nothing
-unify' (Tuple [t1]) (Tuple [t2]) env argOrd subst =
-  unify' t1 t2 env argOrd subst
-unify' (Tuple [t1]) t2 env argOrd subst =
-  unify' t1 t2 env argOrd subst
-unify' t1 (Tuple [t2]) env argOrd subst =
-  unify' t1 t2 env argOrd subst
-unify' (Tuple types1) (Tuple types2) env argOrd subst =
-  case unifyPairwise' types1 types2 env argOrd subst of
-    Just (types, subst') -> Just (Tuple types, subst')
-    Nothing -> Nothing
-unify' (Set t1) (Set t2) env argOrd subst =
-  case unify' t1 t2 env argOrd subst of
-    Just (t, subst') -> Just (Set t, subst')
-    Nothing -> Nothing
-unify' (Record fields1) (Record fields2) env argOrd subst =
-  if names1 == names2 then
-    case unifyPairwise' types1 types2 env argOrd subst of
-      Just (types, subst') ->
-        let fields = List.zip names1 types
-        in Just (Record fields, subst')
-      Nothing -> Nothing
-  else Nothing
-  where fields1' = List.sortBy (comparing fst) fields1
-        fields2' = List.sortBy (comparing fst) fields2
-        (names1, types1) = List.unzip fields1'
-        (names2, types2) = List.unzip fields2'
-unify' (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) env argOrd subst =
-  case unify' tyDom2 tyDom1 env argOrd subst of
-    Just (tyDom, subst') ->
-      case unify' tyCod1 tyCod2 env argOrd subst' of
-        Just (tyCod, subst'') -> Just (Arrow tyDom tyCod, subst'')
+unify' t1 t2 env argOrd subst =
+  let
+    uni' (TypeVar u) (TypeVar u') subst =
+      case (follow subst (TypeVar u), follow subst (TypeVar u')) of
+        (TypeVar u, TypeVar u') -> Just (TypeVar u, Map.insert u (TypeVar u') subst)
+        (TypeVar u, t) -> Just (t, Map.insert u t subst)
+        (t, TypeVar u') -> Just (t, Map.insert u' t subst)
+        (t, t') -> uni' t t' subst
+    uni' (Forall u t1) t2 subst =
+      case uni' t1 t2 subst of
+        Just (ty, subst') -> Just (ty, generalize u subst')
         Nothing -> Nothing
-    Nothing -> Nothing
-unify' (Union t1 t2) (Union t3 t4) env argOrd subst =
-  case unify' t1 t3 env argOrd subst of
-    Just (t13, subst') ->
-      case unify' t2 t4 env argOrd subst' of
-        Just (t24, subst'') -> Just (Union t13 t24, subst'')
+    uni' t1 (Forall u t2) subst =
+      case uni' t1 t2 subst of
+        Just (ty, subst') -> Just (ty, generalize u subst')
         Nothing -> Nothing
-    Nothing -> Nothing
-unify' ty (Union t1 t2) env argOrd subst =
-  case unify' ty t1 env argOrd subst of
-    Just (t, subst') -> Just (t, subst')
-    Nothing -> unify' ty t2 env argOrd subst
-unify' (Union t1 t2) ty env argOrd subst =
-  case unify' t1 ty env argOrd subst of
-    Just (t, subst') -> Just (t, subst')
-    Nothing -> unify' t2 ty env argOrd subst
-unify' (AllOf ts1) (AllOf ts2) env argOrd subst =
-  Just (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-unify' (AllOf ts) t env argOrd subst =
-  if Set.member t (Set.fromList ts) then
-    Just (t, subst)
-  else Nothing
-unify' t (AllOf ts) env argOrd subst = unify' (AllOf ts) t env argOrd subst
-unify' t1 t2 env argOrd subst = Nothing
-
-foldlWithKeyM :: Monad m => (a -> k -> b -> m a) -> a -> Map k b -> m a
-foldlWithKeyM f acc = Map.foldlWithKey f' (return acc) 
-    where
-        f' ma k b = ma >>= \a -> f a k b
+    uni' (TypeVar u) t subst =
+      case follow subst (TypeVar u) of
+        TypeVar u -> Just (t, Map.insert u t subst)
+        t'        -> case uni' t' t subst of
+                      Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
+                      Nothing            -> Nothing
+    uni' t (TypeVar u) subst =
+      case follow subst (TypeVar u) of
+        TypeVar u -> Just (t, Map.insert u t subst)
+        t'        -> case uni' t t' subst of
+                      Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
+                      Nothing            -> Nothing
+    uni' t1@(Name s1 types1) (Name s2 types2) subst =
+      case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
+        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (False, _) -> Nothing
+      where bind1 = makeBindings argOrd s1 types1
+            bind2 = makeBindings argOrd s2 types2
+    uni' t1@(Name s types) t2 subst =
+      case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
+        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (False, _) -> Nothing
+      where bind = makeBindings argOrd s types
+    uni' t1 t2@(Name s types) subst =
+      case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
+        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (False, _) -> Nothing
+      where bind = makeBindings argOrd s types
+    uni' (Array t1) (Array t2) subst =
+      case uni' t1 t2 subst of
+        Just (t, subst') -> Just (Array t, subst')
+        Nothing -> Nothing
+    uni' (Tuple [t1]) (Tuple [t2]) subst =
+      uni' t1 t2 subst
+    uni' (Tuple [t1]) t2 subst =
+      uni' t1 t2 subst
+    uni' t1 (Tuple [t2]) subst =
+      uni' t1 t2 subst
+    uni' (Tuple types1) (Tuple types2) subst =
+      case unifyPairwise' types1 types2 env argOrd subst of
+        Just (types, subst') -> Just (Tuple types, subst')
+        Nothing -> Nothing
+    uni' (Set t1) (Set t2) subst =
+      case uni' t1 t2 subst of
+        Just (t, subst') -> Just (Set t, subst')
+        Nothing -> Nothing
+    uni' (Record fields1) (Record fields2) subst =
+      if names1 == names2 then
+        case unifyPairwise' types1 types2 env argOrd subst of
+          Just (types, subst') ->
+            let fields = List.zip names1 types
+            in Just (Record fields, subst')
+          Nothing -> Nothing
+      else Nothing
+      where fields1' = List.sortBy (comparing fst) fields1
+            fields2' = List.sortBy (comparing fst) fields2
+            (names1, types1) = List.unzip fields1'
+            (names2, types2) = List.unzip fields2'
+    uni' (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst =
+      case uni' tyDom2 tyDom1 subst of
+        Just (tyDom, subst') ->
+          case uni' tyCod1 tyCod2 subst' of
+            Just (tyCod, subst'') -> Just (Arrow tyDom tyCod, subst'')
+            Nothing -> Nothing
+        Nothing -> Nothing
+    uni' (Union t1 t2) (Union t3 t4) subst =
+      case uni' t1 t3 subst of
+        Just (t13, subst') ->
+          case uni' t2 t4 subst' of
+            Just (t24, subst'') -> Just (Union t13 t24, subst'')
+            Nothing -> Nothing
+        Nothing -> Nothing
+    uni' ty (Union t1 t2) subst =
+      case uni' ty t1 subst of
+        Just (t, subst') -> Just (t, subst')
+        Nothing -> uni' ty t2 subst
+    uni' (Union t1 t2) ty subst =
+      case uni' t1 ty subst of
+        Just (t, subst') -> Just (t, subst')
+        Nothing -> uni' t2 ty subst
+    uni' (AllOf ts1) (AllOf ts2) subst =
+      Just (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
+    uni' (AllOf ts) t subst =
+      if Set.member t (Set.fromList ts) then
+        Just (t, subst)
+      else Nothing
+    uni' t (AllOf ts) subst = uni' (AllOf ts) t subst
+    uni' IntType IntType subst = Just (IntType, subst)
+    uni' RealType RealType subst = Just (RealType, subst)
+    uni' StringType StringType subst = Just (StringType, subst)
+    uni' BoolType BoolType subst = Just (BoolType, subst)
+    uni' _ _ _ = Nothing
+  in uni' t1 t2 subst
 
 unifyPairwise' :: [Type] -> [Type] -> Env -> ArgOrd -> Substitution -> Maybe ([Type], Substitution)
 unifyPairwise' types1 types2 env argOrd subst =
@@ -278,6 +310,7 @@ instansiate name ty t =
         | s == name = ty
         | otherwise = Name s []
       inst (Name s tys) = Name s (List.map inst tys)
+      inst (Forall u ty) = Forall u (inst ty)
       inst (Arrow tDom tCod) = Arrow (inst tDom) (inst tCod)
       inst (Union t1 t2) = Union (inst t1) (inst t2)
       inst (Tuple tys) = Tuple (List.map inst tys)
@@ -312,6 +345,7 @@ variance env argOrd t s =
               | otherwise -> v
       var trace v (Arrow t1 t2) =
         lub (invert (var trace v t1)) (var trace v t2)
+      var trace v (Forall u ty) = var trace v ty
       var trace v (Union t1 t2) = lub (var trace v t1) (var trace v t2)
       var trace v (Tuple ts) = lub' (List.map (var trace v) ts)
       var trace v (Record fields) = lub' (List.map (var trace v . snd) fields)
@@ -329,6 +363,14 @@ subtype' env subst argOrd (t1, bind1) (t2, bind2) =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
+    sub assum subst (Forall u t1) t2 =
+      case sub assum subst t1 t2 of
+        (True, subst') -> (True, generalize u subst')
+        (False, subst') -> (False, subst')
+    sub assum subst t1 (Forall u t2) =
+      case sub assum subst t1 t2 of
+        (True, subst') -> (True, generalize u subst')
+        (False, subst') -> (False, subst')
     sub assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of
         TypeVar u -> (True, Map.insert u t1 subst)

@@ -12,6 +12,7 @@ data Type
   | Tuple [Type]
   | Set Type
   | Record [(String, Type)]
+  | Forall Unique Type
   | Arrow Type Type
   | Union Type Type
   | TypeVar Unique
@@ -20,7 +21,7 @@ data Type
     deriving (Show, Eq, Ord)
     
 instance Show Unique where
-  show u = "Unique " ++ show (hashUnique u)
+  show u = "t" ++ show (hashUnique u)
 
 data Decl = TypeDecl String [String] Type
           | FunDecl String [String] [MatchExpr] (Maybe Type) Statement
