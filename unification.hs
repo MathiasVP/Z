@@ -49,6 +49,10 @@ follow subst (TypeVar u) =
     Nothing             -> TypeVar u
     Just (TypeVar u')   -> if u == u' then TypeVar u'
                            else follow subst (TypeVar u')
+    Just IntType        -> IntType
+    Just StringType     -> StringType
+    Just BoolType       -> BoolType
+    Just RealType       -> RealType
     Just (Name s types) -> Name s types
     Just (Array ty) -> Array (follow subst ty)
     Just (Tuple types) -> Tuple (List.map (follow subst) types)
@@ -88,18 +92,18 @@ unify t1 t2 env argOrd subst =
     uni t (TypeVar u) subst = uni (TypeVar u) t subst
     uni t1@(Name s1 types1) t2@(Name s2 types2) subst =
       case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
-        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (True, subst') -> return (t1, subst')
         (False, _) -> return (Union t1 t2, subst)
       where bind1 = makeBindings argOrd s1 types1
             bind2 = makeBindings argOrd s2 types2
     uni t1@(Name s types) t2 subst =
       case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
-        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (True, subst') -> return (t1, subst')
         (False, _) -> return (Union t1 t2, subst)
       where bind = makeBindings argOrd s types
     uni t1 t2@(Name s types) subst =
       case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
-        (True, subst') -> return (t1, subst') --TODO: Or t2?
+        (True, subst') -> return (t1, subst')
         (False, _) -> return (Union t1 t2, subst)
       where bind = makeBindings argOrd s types
     uni (Array t1) (Array t2) subst = do
@@ -185,18 +189,18 @@ unify' t1 t2 env argOrd subst =
                       Nothing            -> Nothing
     uni' t1@(Name s1 types1) (Name s2 types2) subst =
       case subtype' env subst argOrd (env ! s1, bind1) (env ! s2, bind2) of
-        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (True, subst') -> Just (t1, subst')
         (False, _) -> Nothing
       where bind1 = makeBindings argOrd s1 types1
             bind2 = makeBindings argOrd s2 types2
     uni' t1@(Name s types) t2 subst =
       case subtype' env subst argOrd (env ! s, bind) (t2, Map.empty) of
-        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (True, subst') -> Just (t1, subst')
         (False, _) -> Nothing
       where bind = makeBindings argOrd s types
     uni' t1 t2@(Name s types) subst =
       case subtype' env subst argOrd (t1, Map.empty) (env ! s, bind) of
-        (True, subst') -> Just (t1, subst') --TODO: Or t2?
+        (True, subst') -> Just (t1, subst')
         (False, _) -> Nothing
       where bind = makeBindings argOrd s types
     uni' (Array t1) (Array t2) subst =
