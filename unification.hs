@@ -1,6 +1,7 @@
 module Unification where
 import qualified Data.Unique as U
 import qualified Data.List as List
+import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Map ((!))
@@ -27,7 +28,7 @@ generalize u subst =
     Nothing -> subst
 
 makeBindings :: ArgOrd -> String -> [Type] -> Bindings
-makeBindings argOrd s types = Map.fromList $ List.zip (Map.elems (argOrd ! s)) types
+makeBindings argOrd s = Map.fromList . List.zip (Map.elems (argOrd ! s))
 
 unifyTypes :: [Type] -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
 unifyTypes types env argOrd subst = do
@@ -67,12 +68,15 @@ follow subst (TypeVar u) =
     Just (AllOf types) -> AllOf (List.map (follow subst) types)
 follow subst t = t
 
+inserts :: Ord a => Set a -> [a] -> Set a
+inserts = List.foldr Set.insert
+
 unify :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
 unify t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
-    
-    uni bind1 bind2 (TypeVar u) (TypeVar u') subst =
+
+    uni trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') ->
           return (TypeVar u, Map.insert u (TypeVar u') subst)
@@ -80,54 +84,67 @@ unify t1 t2 env argOrd subst =
           return (t, Map.insert u t subst)
         (t, TypeVar u') ->
           return (t, Map.insert u' t subst)
-        (t, t') -> uni bind1 bind2 t t' subst
-    uni bind1 bind2 (Forall u t1) t2 subst = do
-      (ty, subst') <- uni bind1 bind2 t1 t2 subst
+        (t, t') -> uni trace bind1 bind2 t t' subst
+    uni trace bind1 bind2 (Forall u t1) t2 subst = do
+      (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (ty, generalize u subst')
-    uni bind1 bind2 t1 (Forall u t2) subst = do
-      (ty, subst') <- uni bind1 bind2 t1 t2 subst
+    uni trace bind1 bind2 t1 (Forall u t2) subst = do
+      (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (ty, generalize u subst')
-    uni bind1 bind2 (TypeVar u) t subst =
+    uni trace bind1 bind2 (TypeVar u) t subst =
       case follow subst (TypeVar u) of
         TypeVar u -> return (t, Map.insert u t subst)
-        t'        -> do (t'', subst') <- uni bind1 bind2 t t' subst 
+        t'        -> do (t'', subst') <- uni trace bind1 bind2 t t' subst 
                         return (t'', Map.insert u t'' subst')
-    uni bind1 bind2 t (TypeVar u) subst = uni bind1 bind2 (TypeVar u) t subst
-    uni bind1 bind2 (Name s1 types1) (Name s2 types2) subst =
-      uni bind1' bind2' t1 t2 subst
-      where t1 = lookup bind1 env s1
-            t2 = lookup bind2 env s2
+    uni trace bind1 bind2 t (TypeVar u) subst = uni trace bind1 bind2 (TypeVar u) t subst
+    uni trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
+      | Set.member s1 trace && Set.member s2 trace =
+        return (Union (instansiate' t1 bind1') (instansiate' t2 bind2'), subst)
+      | Set.member s1 trace =
+        uni (Set.insert s2 trace) bind1 bind2' t1 t2' subst
+      | Set.member s2 trace =
+        uni (Set.insert s1 trace) bind1' bind2 t1' t2 subst
+      | otherwise =
+        uni (inserts trace [s1, s2]) bind1' bind2' t1' t2' subst
+      where t1' = lookup bind1 env s1
+            t2' = lookup bind2 env s2
             bind1' = makeBindings argOrd s1 types1
             bind2' = makeBindings argOrd s2 types2
-    uni bind1 bind2 (Name s types) t2 subst =
-      uni bind bind2 t t2 subst
+    uni trace bind1 bind2 t1@(Name s types) t2 subst
+      | Set.member s trace =
+        return (Union (instansiate' t1 bind) (instansiate' t2 bind2), subst)
+      | otherwise =
+        uni (Set.insert s trace) bind bind2 t t2 subst
       where t = lookup bind1 env s
             bind = makeBindings argOrd s types
-    uni bind1 bind2 t1 t2@(Name s types) subst =
-      uni bind1 bind t1 t subst
+    uni trace bind1 bind2 t1 t2@(Name s types) subst
+      | Set.member s trace =
+        return (Union (instansiate' t1 bind1) (instansiate' t2 bind), subst)
+      | otherwise =
+        uni (Set.insert s trace) bind1 bind t1 t subst
       where t = lookup bind2 env s
             bind = makeBindings argOrd s types
-    uni bind1 bind2 (Array t1) (Array t2) subst = do
-      (t, subst') <- uni bind1 bind2 t1 t2 subst 
+    uni trace bind1 bind2 (Array t1) (Array t2) subst = do
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
       return (Array t, subst')
-    uni bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst = do
-      (t, subst') <- uni bind1 bind2 t1 t2 subst 
+    uni trace bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst = do
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
       return (Tuple [t], subst')
-    uni bind1 bind2 (Tuple [t1]) t2 subst = do
-      (t, subst') <- uni bind1 bind2 t1 t2 subst 
+    uni trace bind1 bind2 (Tuple [t1]) t2 subst = do
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
       return (t, subst')
-    uni bind1 bind2 t1 (Tuple [t2]) subst = do
-      (t, subst') <- uni bind1 bind2 t1 t2 subst 
+    uni trace bind1 bind2 t1 (Tuple [t2]) subst = do
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
       return (t, subst')
-    uni bind1 bind2 (Tuple types1) (Tuple types2) subst =
+    uni trace bind1 bind2 (Tuple types1) (Tuple types2) subst =
       if List.length types1 == List.length types2 then do
         (types, subst') <- unifyPairwise types1 types2 env argOrd subst 
         return (Tuple types, subst')
       else return (Union (Tuple types1) (Tuple types2), subst)
-    uni bind1 bind2 (Set t1) (Set t2) subst = do
-      (t, subst') <- uni bind1 bind2 t1 t2 subst 
+    uni trace bind1 bind2 (Set t1) (Set t2) subst = do
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
       return (Set t, subst')
-    uni bind1 bind2 (Record fields1) (Record fields2) subst = do
+    uni trace bind1 bind2 (Record fields1) (Record fields2) subst = do
       (types, subst') <- unifyPairwise types1 types2 env argOrd subst
       let fields = List.zip names1 types
       if names1 == names2 then
@@ -137,92 +154,105 @@ unify t1 t2 env argOrd subst =
             fields2' = List.sortBy (comparing fst) fields2
             (names1, types1) = List.unzip fields1'
             (names2, types2) = List.unzip fields2'
-    uni bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
-      (tyDom, subst') <- uni bind1 bind2 tyDom1 tyDom2 subst 
-      (tyCod, subst'') <- uni bind1 bind2 tyCod1 tyCod2 subst' 
+    uni trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
+      (tyDom, subst') <- uni trace bind1 bind2 tyDom1 tyDom2 subst 
+      (tyCod, subst'') <- uni trace bind1 bind2 tyCod1 tyCod2 subst' 
       return (Arrow tyDom tyCod, subst'')
-    uni bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do -- TODO: This is incorrect.
-      (t13, subst') <- uni bind1 bind2 t1 t3 subst         -- The correct version
-      (t24, subst'') <- uni bind1 bind2 t2 t4 subst'       -- should be like in subtype
+    uni trace bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do
+      (t13, subst') <- uni trace bind1 bind2 t1 t3 subst
+      (t24, subst'') <- uni trace bind1 bind2 t2 t4 subst'
       return (Union t13 t24, subst'')
-    uni bind1 bind2 (AllOf ts1) (AllOf ts2) subst =
+    uni trace bind1 bind2 (AllOf ts1) (AllOf ts2) subst =
       return (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-    uni bind1 bind2 (AllOf ts) t subst =
+    uni trace bind1 bind2 (AllOf ts) t subst =
       if Set.member t (Set.fromList ts) then
         return (t, subst)
       else return (Union (AllOf ts) t, subst)
-    uni bind1 bind2 t (AllOf ts) subst = uni bind1 bind2 (AllOf ts) t subst
-    uni bind1 bind2 IntType IntType subst = return (IntType, subst)
-    uni bind1 bind2 RealType RealType subst = return (RealType, subst)
-    uni bind1 bind2 StringType StringType subst = return (StringType, subst)
-    uni bind1 bind2 BoolType BoolType subst = return (BoolType, subst)
-    uni bind1 bind2 t1 t2 subst = return (Union t1 t2, subst)
-  in uni Map.empty Map.empty t1 t2 subst
+    uni trace bind1 bind2 t (AllOf ts) subst = uni trace bind1 bind2 (AllOf ts) t subst
+    uni trace bind1 bind2 IntType IntType subst = return (IntType, subst)
+    uni trace bind1 bind2 RealType RealType subst = return (RealType, subst)
+    uni trace bind1 bind2 StringType StringType subst = return (StringType, subst)
+    uni trace bind1 bind2 BoolType BoolType subst = return (BoolType, subst)
+    uni trace bind1 bind2 t1 t2 subst = return (Union t1 t2, subst)
+  in uni Set.empty Map.empty Map.empty t1 t2 subst
 
 unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> Maybe (Type, Substitution)
 unify' t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
-    uni' bind1 bind2 (TypeVar u) (TypeVar u') subst =
+    uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') -> Just (TypeVar u, Map.insert u (TypeVar u') subst)
         (TypeVar u, t) -> Just (t, Map.insert u t subst)
         (t, TypeVar u') -> Just (t, Map.insert u' t subst)
-        (t, t') -> uni' bind1 bind2 t t' subst
-    uni' bind1 bind2 (Forall u t1) t2 subst =
-      case uni' bind1 bind2 t1 t2 subst of
+        (t, t') -> uni' trace bind1 bind2 t t' subst
+    uni' trace bind1 bind2 (Forall u t1) t2 subst =
+      case uni' trace bind1 bind2 t1 t2 subst of
         Just (ty, subst') -> Just (ty, generalize u subst')
         Nothing -> Nothing
-    uni' bind1 bind2 t1 (Forall u t2) subst =
-      case uni' bind1 bind2 t1 t2 subst of
+    uni' trace bind1 bind2 t1 (Forall u t2) subst =
+      case uni' trace bind1 bind2 t1 t2 subst of
         Just (ty, subst') -> Just (ty, generalize u subst')
         Nothing -> Nothing
-    uni' bind1 bind2 (TypeVar u) t subst =
+    uni' trace bind1 bind2 (TypeVar u) t subst =
       case follow subst (TypeVar u) of
         TypeVar u -> Just (t, Map.insert u t subst)
-        t'        -> case uni' bind1 bind2 t' t subst of
+        t'        -> case uni' trace bind1 bind2 t' t subst of
                       Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
                       Nothing            -> Nothing
-    uni' bind1 bind2 t (TypeVar u) subst =
+    uni' trace bind1 bind2 t (TypeVar u) subst =
       case follow subst (TypeVar u) of
         TypeVar u -> Just (t, Map.insert u t subst)
-        t'        -> case uni' bind1 bind2 t t' subst of
+        t'        -> case uni' trace bind1 bind2 t t' subst of
                       Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
                       Nothing            -> Nothing
-    uni' bind1 bind2 (Name s1 types1) (Name s2 types2) subst =
-      uni' bind1' bind2' t1 t2 subst
-      where t1 = lookup bind1 env s1
-            t2 = lookup bind2 env s2
+    uni' trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
+      | Set.member s1 trace && Set.member s2 trace =
+        Nothing
+      | Set.member s1 trace =
+        uni' (Set.insert s2 trace) bind1 bind2' t1 t2' subst
+      | Set.member s2 trace =
+        uni' (Set.insert s1 trace) bind1' bind2 t1' t2 subst
+      | otherwise =
+        uni' (inserts trace [s1, s2]) bind1' bind2' t1' t2' subst
+      where t1' = lookup bind1 env s1
+            t2' = lookup bind2 env s2
             bind1' = makeBindings argOrd s1 types1
             bind2' = makeBindings argOrd s2 types2
-    uni' bind1 bind2 (Name s types) t2 subst =
-      uni' bind bind2 t t2 subst
+    uni' trace bind1 bind2 t1@(Name s types) t2 subst
+      | Set.member s trace =
+        Nothing
+      | otherwise =
+        uni' (Set.insert s trace) bind bind2 t t2 subst
       where t = lookup bind1 env s
             bind = makeBindings argOrd s types
-    uni' bind1 bind2 t1 (Name s types) subst =
-      uni' bind1 bind t1 t subst
+    uni' trace bind1 bind2 t1 t2@(Name s types) subst
+      | Set.member s trace =
+        Nothing
+      | otherwise =
+        uni' (Set.insert s trace) bind1 bind t1 t subst
       where t = lookup bind2 env s
             bind = makeBindings argOrd s types
-    uni' bind1 bind2 (Array t1) (Array t2) subst =
-      case uni' bind1 bind2 t1 t2 subst of
+    uni' trace bind1 bind2 (Array t1) (Array t2) subst =
+      case uni' trace bind1 bind2 t1 t2 subst of
         Just (t, subst') -> Just (Array t, subst')
         Nothing -> Nothing
-    uni' bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst =
-      uni' bind1 bind2 t1 t2 subst
-    uni' bind1 bind2 (Tuple [t1]) t2 subst =
-      uni' bind1 bind2 t1 t2 subst
-    uni' bind1 bind2 t1 (Tuple [t2]) subst =
-      uni' bind1 bind2 t1 t2 subst
-    uni' bind1 bind2 (Tuple types1) (Tuple types2) subst =
+    uni' trace bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst =
+      uni' trace bind1 bind2 t1 t2 subst
+    uni' trace bind1 bind2 (Tuple [t1]) t2 subst =
+      uni' trace bind1 bind2 t1 t2 subst
+    uni' trace bind1 bind2 t1 (Tuple [t2]) subst =
+      uni' trace bind1 bind2 t1 t2 subst
+    uni' trace bind1 bind2 (Tuple types1) (Tuple types2) subst =
       case unifyPairwise' types1 types2 env argOrd subst of
         Just (types, subst') -> Just (Tuple types, subst')
         Nothing -> Nothing
-    uni' bind1 bind2 (Set t1) (Set t2) subst =
-      case uni' bind1 bind2 t1 t2 subst of
+    uni' trace bind1 bind2 (Set t1) (Set t2) subst =
+      case uni' trace bind1 bind2 t1 t2 subst of
         Just (t, subst') -> Just (Set t, subst')
         Nothing -> Nothing
-    uni' bind1 bind2 (Record fields1) (Record fields2) subst
+    uni' trace bind1 bind2 (Record fields1) (Record fields2) subst
       | names1 == names2 =
         case unifyPairwise' types1 types2 env argOrd subst of
           Just (types, subst') ->
@@ -234,40 +264,47 @@ unify' t1 t2 env argOrd subst =
             fields2' = List.sortBy (comparing fst) fields2
             (names1, types1) = List.unzip fields1'
             (names2, types2) = List.unzip fields2'
-    uni' bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst =
-      case uni' bind1 bind2 tyDom2 tyDom1 subst of
+    uni' trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst =
+      case uni' trace bind1 bind2 tyDom2 tyDom1 subst of
         Just (tyDom, subst') ->
-          case uni' bind1 bind2 tyCod1 tyCod2 subst' of
+          case uni' trace bind1 bind2 tyCod1 tyCod2 subst' of
             Just (tyCod, subst'') -> Just (Arrow tyDom tyCod, subst'')
             Nothing -> Nothing
         Nothing -> Nothing
-    uni' bind1 bind2 (Union t1 t2) (Union t3 t4) subst =  -- TODO: This is incorrect.
-      case uni' bind1 bind2 t1 t3 subst of                -- The correct version
-        Just (t13, subst') ->                             -- should be like in subtype
-          case uni' bind1 bind2 t2 t4 subst' of
-            Just (t24, subst'') -> Just (Union t13 t24, subst'')
-            Nothing -> Nothing
-        Nothing -> Nothing
-    uni' bind1 bind2 ty (Union t1 t2) subst =
-      case uni' bind1 bind2 ty t1 subst of
+    uni' trace bind1 bind2 (Union t11 t12) (Union t21 t22) subst =
+      case (uni' trace bind1 bind2 t11 t21 subst,
+            uni' trace bind1 bind2 t11 t22 subst) of
+        (Just (t1121, subst1121), _) ->
+          case (uni' trace bind1 bind2 t12 t21 subst1121,
+                uni' trace bind1 bind2 t12 t22 subst1121) of
+            (Just (t1221, subst1221), _) -> Just (Union t1121 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> Just (Union t1121 t1222, subst1222)
+        (_, Just (t1122, subst1122)) ->
+          case (uni' trace bind1 bind2 t12 t21 subst1122,
+                uni' trace bind1 bind2 t12 t22 subst1122) of
+            (Just (t1221, subst1221), _) -> Just (Union t1122 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> Just (Union t1122 t1222, subst1222)
+        (_, _) -> Nothing
+    uni' trace bind1 bind2 ty (Union t1 t2) subst =
+      case uni' trace bind1 bind2 ty t1 subst of
         Just (t, subst') -> Just (t, subst')
-        Nothing -> uni' bind1 bind2 ty t2 subst
-    uni' bind1 bind2 (Union t1 t2) ty subst =
-      case uni' bind1 bind2 t1 ty subst of
+        Nothing -> uni' trace bind1 bind2 ty t2 subst
+    uni' trace bind1 bind2 (Union t1 t2) ty subst =
+      case uni' trace bind1 bind2 t1 ty subst of
         Just (t, subst') -> Just (t, subst')
-        Nothing -> uni' bind1 bind2 t2 ty subst
-    uni' bind1 bind2 (AllOf ts1) (AllOf ts2) subst =
+        Nothing -> uni' trace bind1 bind2 t2 ty subst
+    uni' trace bind1 bind2 (AllOf ts1) (AllOf ts2) subst =
       Just (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-    uni' bind1 bind2 (AllOf ts) t subst
+    uni' trace bind1 bind2 (AllOf ts) t subst
       | Set.member t (Set.fromList ts) = Just (t, subst)
       | otherwise = Nothing
-    uni' bind1 bind2 t (AllOf ts) subst = uni' bind1 bind2 (AllOf ts) t subst
-    uni' bind1 bind2 IntType IntType subst = Just (IntType, subst)
-    uni' bind1 bind2 RealType RealType subst = Just (RealType, subst)
-    uni' bind1 bind2 StringType StringType subst = Just (StringType, subst)
-    uni' bind1 bind2 BoolType BoolType subst = Just (BoolType, subst)
-    uni' _ _ _ _ _ = Nothing
-  in uni' Map.empty Map.empty t1 t2 subst
+    uni' trace bind1 bind2 t (AllOf ts) subst = uni' trace bind1 bind2 (AllOf ts) t subst
+    uni' trace bind1 bind2 IntType IntType subst = Just (IntType, subst)
+    uni' trace bind1 bind2 RealType RealType subst = Just (RealType, subst)
+    uni' trace bind1 bind2 StringType StringType subst = Just (StringType, subst)
+    uni' trace bind1 bind2 BoolType BoolType subst = Just (BoolType, subst)
+    uni' trace _ _ _ _ _ = Nothing
+  in uni' Set.empty Map.empty Map.empty t1 t2 subst
 
 unifyPairwise' :: [Type] -> [Type] -> Env -> ArgOrd -> Substitution -> Maybe ([Type], Substitution)
 unifyPairwise' types1 types2 env argOrd subst =
@@ -330,8 +367,8 @@ instansiate name ty t =
       inst (AllOf tys) = AllOf (List.map inst tys)
   in inst t
 
-instansiate' :: Type -> [(String, Type)] -> Type
-instansiate' = List.foldr (uncurry instansiate)
+instansiate' :: Type -> Map String Type -> Type
+instansiate' = Map.foldrWithKey instansiate
 
 variance :: Env -> ArgOrd -> Type -> String -> Variance
 variance env argOrd t s =
@@ -342,7 +379,7 @@ variance env argOrd t s =
             Just ty ->
               let order = argOrd ! s'
                   names = List.map (order !) [0..]
-                  ty' = instansiate' ty (List.zip names tys)
+                  ty' = instansiate' ty (Map.fromList (List.zip names tys))
               in var (Set.insert s' trace) v ty'
             Nothing
               | s == s'   -> lub v Positive
