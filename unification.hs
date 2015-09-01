@@ -10,6 +10,7 @@ import Control.Monad
 import Data.Ord
 import Ast
 import TypedAst
+import qualified Debug.Trace as Debug
 
 type Substitution = Map U.Unique Type
 type Env = Map String Type

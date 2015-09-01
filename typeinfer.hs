@@ -87,7 +87,6 @@ infer decls = do
       let functionTy = List.foldr (makeForall subst') (mkArrowType types retTy') types
       let env'' = Map.insert name functionTy env'
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
-      -- TODO: Find a testcase where functionTy <> functionTy'
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
       let functionTy' = List.foldr (makeForall subst''') (mkArrowType types retTy') types
       let globEnv = Map.insert name functionTy' env
@@ -208,7 +207,7 @@ infer decls = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       (s', envBody, _, substBody) <- inferStatement s envExpr argOrd' substExpr 
       subst' <- mergeSubstitution env argOrd substExpr substBody 
-      (env', subst'') <- mergeEnv envExpr envBody argOrd subst' 
+      (env', subst'') <- mergeEnv envExpr (Map.intersection envBody envExpr) argOrd subst'
       return (TIfStatement e' s' Nothing, env', argOrd', subst'')
       
     inferStatement (IfStatement e sThen (Just sElse)) env argOrd subst  = do
@@ -216,14 +215,14 @@ infer decls = do
       (sThen', envThen, _, substThen) <- inferStatement sThen env' argOrd' subst' 
       (sElse', envElse, _, substElse) <- inferStatement sElse env' argOrd' subst' 
       subst' <- mergeSubstitution env argOrd substThen substElse 
-      (env'', subst'') <- mergeEnv envThen envElse argOrd subst' 
+      (env'', subst'') <- mergeEnv (Map.intersection envThen env') (Map.intersection envElse env') argOrd subst'
       return (TIfStatement e' sThen' (Just sElse'), env'', argOrd', subst'')
       
     inferStatement (WhileStatement e s) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       (s', envBody, _, substBody) <- inferStatement s envExpr argOrd' substExpr 
       subst' <- mergeSubstitution env argOrd substExpr substBody 
-      (env', subst'') <- mergeEnv envExpr envBody argOrd subst' 
+      (env', subst'') <- mergeEnv envExpr (Map.intersection envBody envExpr) argOrd subst'
       return (TWhileStatement e' s', env', argOrd', subst'')
 
     inferStatement (ForStatement me e s) env argOrd subst  = do
@@ -239,7 +238,7 @@ infer decls = do
       (me', envMatchExpr, argOrd'', substMatchExpr) <- inferMatchExpr (Just t') me envExpr argOrd' subst' 
       (s', envBody, _, substBody) <- inferStatement s envMatchExpr argOrd'' substMatchExpr 
       subst'' <- mergeSubstitution env argOrd substMatchExpr substBody 
-      (env', subst''') <- mergeEnv envMatchExpr envBody argOrd subst'' 
+      (env', subst''') <- mergeEnv envMatchExpr (Map.intersection envBody envMatchExpr) argOrd subst'' 
       return (TForStatement me' e' s', env', argOrd'', subst''')
 
     inferStatement (CompoundStatement ss) env argOrd subst = do
@@ -580,12 +579,11 @@ infer decls = do
           replace trace (TypeVar u)
             | Set.member u trace = TypeVar u
             | otherwise =
-                case Map.lookup u subst of
-                  Just (TypeVar u') ->
-                    if u == u' then TypeVar u'
-                    else replace (Set.insert u trace) (TypeVar u')
-                  Just t -> replace (Set.insert u trace) t
-                  Nothing -> TypeVar u
+                case follow subst (TypeVar u) of
+                  TypeVar u'
+                    | u == u' -> TypeVar u
+                    | otherwise -> replace (Set.insert u trace) (TypeVar u')
+                  t -> replace (Set.insert u trace) t
           replace trace Error = Error
           replace trace (AllOf types) = AllOf (List.map (replace trace) types)
       in replace Set.empty ty
