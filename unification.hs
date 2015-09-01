@@ -141,7 +141,7 @@ unify t1 t2 env argOrd subst =
       (tyDom, subst') <- uni bind1 bind2 tyDom1 tyDom2 subst 
       (tyCod, subst'') <- uni bind1 bind2 tyCod1 tyCod2 subst' 
       return (Arrow tyDom tyCod, subst'')
-    uni bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do -- This is incorrect.
+    uni bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do -- TODO: This is incorrect.
       (t13, subst') <- uni bind1 bind2 t1 t3 subst         -- The correct version
       (t24, subst'') <- uni bind1 bind2 t2 t4 subst'       -- should be like in subtype
       return (Union t13 t24, subst'')
@@ -222,14 +222,14 @@ unify' t1 t2 env argOrd subst =
       case uni' bind1 bind2 t1 t2 subst of
         Just (t, subst') -> Just (Set t, subst')
         Nothing -> Nothing
-    uni' bind1 bind2 (Record fields1) (Record fields2) subst =
-      if names1 == names2 then
+    uni' bind1 bind2 (Record fields1) (Record fields2) subst
+      | names1 == names2 =
         case unifyPairwise' types1 types2 env argOrd subst of
           Just (types, subst') ->
             let fields = List.zip names1 types
             in Just (Record fields, subst')
           Nothing -> Nothing
-      else Nothing
+      | otherwise = Nothing
       where fields1' = List.sortBy (comparing fst) fields1
             fields2' = List.sortBy (comparing fst) fields2
             (names1, types1) = List.unzip fields1'
@@ -241,9 +241,9 @@ unify' t1 t2 env argOrd subst =
             Just (tyCod, subst'') -> Just (Arrow tyDom tyCod, subst'')
             Nothing -> Nothing
         Nothing -> Nothing
-    uni' bind1 bind2 (Union t1 t2) (Union t3 t4) subst =
-      case uni' bind1 bind2 t1 t3 subst of
-        Just (t13, subst') ->
+    uni' bind1 bind2 (Union t1 t2) (Union t3 t4) subst =  -- TODO: This is incorrect.
+      case uni' bind1 bind2 t1 t3 subst of                -- The correct version
+        Just (t13, subst') ->                             -- should be like in subtype
           case uni' bind1 bind2 t2 t4 subst' of
             Just (t24, subst'') -> Just (Union t13 t24, subst'')
             Nothing -> Nothing
@@ -258,10 +258,9 @@ unify' t1 t2 env argOrd subst =
         Nothing -> uni' bind1 bind2 t2 ty subst
     uni' bind1 bind2 (AllOf ts1) (AllOf ts2) subst =
       Just (AllOf $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-    uni' bind1 bind2 (AllOf ts) t subst =
-      if Set.member t (Set.fromList ts) then
-        Just (t, subst)
-      else Nothing
+    uni' bind1 bind2 (AllOf ts) t subst
+      | Set.member t (Set.fromList ts) = Just (t, subst)
+      | otherwise = Nothing
     uni' bind1 bind2 t (AllOf ts) subst = uni' bind1 bind2 (AllOf ts) t subst
     uni' bind1 bind2 IntType IntType subst = Just (IntType, subst)
     uni' bind1 bind2 RealType RealType subst = Just (RealType, subst)
