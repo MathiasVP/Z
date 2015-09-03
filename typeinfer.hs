@@ -121,7 +121,7 @@ infer decls = do
             inferList (inferMatchExpr Nothing) env argOrd subst mes
       return ((TTupleMatchExpr mes', Tuple (List.map typeOf mes')), env', argOrd', subst')
 
-    inferMatchExpr tm (ListMatchExpr mes) env argOrd subst  = do
+    inferMatchExpr tm (ListMatchExpr mes) env argOrd subst = do
       (mes', env', argOrd', subst') <-
         case tm of
           Just (Array t) -> inferList (inferMatchExpr (Just t)) env argOrd subst mes
@@ -133,7 +133,7 @@ infer decls = do
       (ty, subst'') <- unifyTypes (List.map typeOf mes') env argOrd subst'
       return ((TListMatchExpr mes', Array ty), env', argOrd', subst'')
       
-    inferMatchExpr tm (SetMatchExpr mes) env argOrd subst  = do
+    inferMatchExpr tm (SetMatchExpr mes) env argOrd subst = do
       (mes', env', argOrd', subst') <-
         case tm of
           Just (Set t) -> inferList (inferMatchExpr (Just t)) env argOrd subst mes
@@ -145,13 +145,13 @@ infer decls = do
       (ty, subst'') <- unifyTypes (List.map typeOf mes') env argOrd subst' 
       return ((TSetMatchExpr mes', Set ty), env', argOrd', subst'')
       
-    inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst  = do
+    inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst = do
       (fields', env', argOrd', subst') <-
         case tm of
           Just (Record fields') ->
             if equalRecordFields fields fields' then
               let typesm = List.map (Just . typeOf) (normaliseFields fields')
-                  f tm (name, me) env argOrd subst  = do
+                  f tm (name, me) env argOrd subst = do
                     (me', env', argOrd', subst') <- inferMatchExpr tm me env argOrd subst 
                     return ((name, me'), env', argOrd', subst')
                   fs = List.map f typesm
@@ -164,19 +164,19 @@ infer decls = do
             let fields' = List.zip (normaliseFields fields) types
             let mkField ((s, _), ty) = (s, ty)
             (_, subst') <- unify (TypeVar u) (Record (List.map mkField fields')) env argOrd subst 
-            let f ((name, me), ty) env argOrd subst  = do
+            let f ((name, me), ty) env argOrd subst = do
                 (me', env', argOrd', subst') <- inferMatchExpr (Just ty) me env argOrd subst 
                 return ((name, me'), env', argOrd', subst')
             inferList f env argOrd subst' fields'
           Nothing ->
-            let f (name, me) env argOrd subst  = do
+            let f (name, me) env argOrd subst = do
                   (me', env, argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst 
                   return ((name, me'), Map.insert name (typeOf me') env, argOrd', subst')
             in inferList f env argOrd subst fields
       let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
       return ((TRecordMatchExpr fields', Record recordTypes), env', argOrd', subst')
 
-    inferMatchExpr tm (TypedMatchExpr me ty) env argOrd subst  = do
+    inferMatchExpr tm (TypedMatchExpr me ty) env argOrd subst = do
       (me', env', argOrd', subst') <- inferMatchExpr tm me env argOrd subst 
       case unify' ty (typeOf me') env' argOrd' subst'  of
         Just (ty'', subst'') -> return (me', env', argOrd', subst'')
@@ -185,7 +185,7 @@ infer decls = do
                      "' with actual type '" ++ show (typeOf me') ++ "'."
           return (me', env, argOrd', subst)
 
-    inferMatchExpr tm (VarMatch name) env argOrd subst  =
+    inferMatchExpr tm (VarMatch name) env argOrd subst =
       case tm of
         Just t ->
           return ((TVarMatch name, t), Map.insert name t env, argOrd, subst)
@@ -193,24 +193,24 @@ infer decls = do
           t <- mkTypeVar
           return ((TVarMatch name, t), Map.insert name t env, argOrd, subst)
 
-    inferMatchExpr tm (IntMatchExpr n) env argOrd subst  =
+    inferMatchExpr tm (IntMatchExpr n) env argOrd subst =
       return ((TIntMatchExpr n, IntType), env, argOrd, subst)
       
-    inferMatchExpr tm (StringMatchExpr s) env argOrd subst  =
+    inferMatchExpr tm (StringMatchExpr s) env argOrd subst =
       return ((TStringMatchExpr s, StringType), env, argOrd, subst)
 
-    inferMatchExpr tm (BoolMatchExpr b) env argOrd subst  =
+    inferMatchExpr tm (BoolMatchExpr b) env argOrd subst =
       return ((TBoolMatchExpr b, BoolType), env, argOrd, subst)
     
     inferStatement :: Statement -> Env -> ArgOrd -> Substitution -> IO (TypedStatement, Env, ArgOrd, Substitution)
-    inferStatement (IfStatement e s Nothing) env argOrd subst  = do
+    inferStatement (IfStatement e s Nothing) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       (s', envBody, _, substBody) <- inferStatement s envExpr argOrd' substExpr 
       subst' <- mergeSubstitution env argOrd substExpr substBody 
       (env', subst'') <- mergeEnv envExpr (Map.intersection envBody envExpr) argOrd subst'
       return (TIfStatement e' s' Nothing, env', argOrd', subst'')
       
-    inferStatement (IfStatement e sThen (Just sElse)) env argOrd subst  = do
+    inferStatement (IfStatement e sThen (Just sElse)) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
       (sThen', envThen, _, substThen) <- inferStatement sThen env' argOrd' subst' 
       (sElse', envElse, _, substElse) <- inferStatement sElse env' argOrd' subst' 
@@ -225,7 +225,7 @@ infer decls = do
       (env', subst'') <- mergeEnv envExpr (Map.intersection envBody envExpr) argOrd subst'
       return (TWhileStatement e' s', env', argOrd', subst'')
 
-    inferStatement (ForStatement me e s) env argOrd subst  = do
+    inferStatement (ForStatement me e s) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       t <- mkTypeVar
       (t', subst') <-
@@ -245,13 +245,13 @@ infer decls = do
       (ss', env', argOrd', subst') <- inferList inferStatement env argOrd subst ss
       return (TCompoundStatement ss', env', argOrd', subst')
 
-    inferStatement (AssignStatement (Left me) e) env argOrd subst  = do
+    inferStatement (AssignStatement (Left me) e) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       (me', envMatchExpr, argOrd'', substMatchExpr) <-
         inferMatchExpr (Just $ typeOf e') me envExpr argOrd' substExpr 
       return (TAssignStatement (Left me') e', envMatchExpr, argOrd'', substMatchExpr)
 
-    inferStatement (AssignStatement (Right lve) e) env argOrd subst  = do
+    inferStatement (AssignStatement (Right lve) e) env argOrd subst = do
       (e', env, argOrd', substExpr) <- inferExpr e env argOrd subst 
       (lve', env', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve env argOrd' substExpr 
       return (TAssignStatement (Right lve') e', env', argOrd', substLValueExpr)
@@ -268,17 +268,17 @@ infer decls = do
               (s', env'', argOrd'', subst''') <- inferStatement s env' argOrd' subst''
               return ((me', s'), env'', argOrd'', subst''')
                 
-    inferStatement (ReturnStatement e) env argOrd subst  = do
+    inferStatement (ReturnStatement e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
       return (TReturnStatement e', env', argOrd', subst')
       
-    inferStatement BreakStatement env argOrd subst  =
+    inferStatement BreakStatement env argOrd subst =
       return (TBreakStatement, env, argOrd, subst)
       
-    inferStatement ContinueStatement env argOrd subst  =
+    inferStatement ContinueStatement env argOrd subst =
       return (TContinueStatement, env, argOrd, subst)
       
-    inferStatement (DeclStatement decl) env argOrd subst  = do
+    inferStatement (DeclStatement decl) env argOrd subst = do
       (decl', env', argOrd', subst') <- inferDecl decl env argOrd subst 
       return (TDeclStatement decl', env', argOrd', subst')
 
@@ -309,7 +309,7 @@ infer decls = do
                      "' with type '" ++ show expectedType ++ "'."
           return (Error, subst)
           
-    mkLogicalOpType e1 e2 env argOrd subst  =
+    mkLogicalOpType e1 e2 env argOrd subst =
       case unify' (typeOf e1) BoolType env argOrd subst  of
         Just (t1, subst1) ->
           case unify' (typeOf e2) BoolType env argOrd subst1  of
@@ -355,55 +355,55 @@ infer decls = do
                      "' with type '" ++ show expectedType ++ "'."
           return (Error, subst)
       
-    inferExpr (IntExpr n) env argOrd subst  =
+    inferExpr (IntExpr n) env argOrd subst =
       return ((TIntExpr n, IntType), env, argOrd, subst)
 
-    inferExpr (RealExpr n) env argOrd subst  =
+    inferExpr (RealExpr n) env argOrd subst =
       return ((TRealExpr n, RealType), env, argOrd, subst)
       
-    inferExpr (BoolExpr b) env argOrd subst  =
+    inferExpr (BoolExpr b) env argOrd subst =
       return ((TBoolExpr b, BoolType), env, argOrd, subst)
       
-    inferExpr (StringExpr s) env argOrd subst  =
+    inferExpr (StringExpr s) env argOrd subst =
       return ((TStringExpr s, StringType), env, argOrd, subst)
 
-    inferExpr (OrExpr e1 e2) env argOrd subst  =
+    inferExpr (OrExpr e1 e2) env argOrd subst =
       inferBinopExpr TOrExpr mkLogicalOpType env argOrd subst e1 e2
 
-    inferExpr (AndExpr e1 e2) env argOrd subst  =
+    inferExpr (AndExpr e1 e2) env argOrd subst =
       inferBinopExpr TAndExpr mkLogicalOpType env argOrd subst  e1 e2
 
-    inferExpr (EqExpr e1 e2) env argOrd subst  =
+    inferExpr (EqExpr e1 e2) env argOrd subst =
       inferBinopExpr TEqExpr mkEqOpType env argOrd subst  e1 e2
       
-    inferExpr (NeqExpr e1 e2) env argOrd subst  =
+    inferExpr (NeqExpr e1 e2) env argOrd subst =
       inferBinopExpr TNeqExpr mkEqOpType env argOrd subst  e1 e2
       
-    inferExpr (LtExpr e1 e2) env argOrd subst  =
+    inferExpr (LtExpr e1 e2) env argOrd subst =
       inferBinopExpr TLtExpr mkRelOpType env argOrd subst  e1 e2
       
-    inferExpr (GtExpr e1 e2) env argOrd subst  =
+    inferExpr (GtExpr e1 e2) env argOrd subst =
       inferBinopExpr TGtExpr mkRelOpType env argOrd subst  e1 e2
       
-    inferExpr (LeExpr e1 e2) env argOrd subst  =
+    inferExpr (LeExpr e1 e2) env argOrd subst =
       inferBinopExpr TLeExpr mkRelOpType env argOrd subst  e1 e2
 
-    inferExpr (GeExpr e1 e2) env argOrd subst  =
+    inferExpr (GeExpr e1 e2) env argOrd subst =
       inferBinopExpr TGeExpr mkRelOpType env argOrd subst  e1 e2
       
-    inferExpr (AddExpr e1 e2) env argOrd subst  =
+    inferExpr (AddExpr e1 e2) env argOrd subst =
       inferBinopExpr TAddExpr mkMathOpType env argOrd subst  e1 e2
       
-    inferExpr (SubExpr e1 e2) env argOrd subst  =
+    inferExpr (SubExpr e1 e2) env argOrd subst =
       inferBinopExpr TSubExpr mkMathOpType env argOrd subst  e1 e2
       
-    inferExpr (MultExpr e1 e2) env argOrd subst  =
+    inferExpr (MultExpr e1 e2) env argOrd subst =
       inferBinopExpr TMultExpr mkMathOpType env argOrd subst  e1 e2
       
-    inferExpr (DivExpr e1 e2) env argOrd subst  =
+    inferExpr (DivExpr e1 e2) env argOrd subst =
       inferBinopExpr TDivExpr mkMathOpType env argOrd subst  e1 e2
 
-    inferExpr (UnaryMinusExpr e) env argOrd subst  = do
+    inferExpr (UnaryMinusExpr e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
       case unify' (typeOf e') (AllOf [IntType, RealType]) env' argOrd' subst'  of
         Just (t, subst'') -> return ((TUnaryMinusExpr e', t), env', argOrd', subst'')
@@ -411,7 +411,7 @@ infer decls = do
                                  show (typeOf e') ++ "'."
                       return ((TUnaryMinusExpr e', Error), env, argOrd', subst)
 
-    inferExpr (BangExpr e) env argOrd subst  = do
+    inferExpr (BangExpr e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
       case unify' (typeOf e') BoolType env' argOrd' subst'  of
         Just (t, subst'') -> return ((TBangExpr e', BoolType), env', argOrd', subst'')
@@ -419,7 +419,7 @@ infer decls = do
                                  show (typeOf e') ++ "'."
                       return ((TBangExpr e', BoolType), env', argOrd', subst')
 
-    inferExpr (CallExpr f arg) env argOrd subst  = do
+    inferExpr (CallExpr f arg) env argOrd subst = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst 
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst' 
       tDom <- mkTypeVar
@@ -438,7 +438,7 @@ infer decls = do
                        "' with actual type '" ++ show (typeOf f') ++ "'."
             return ((TCallExpr f' arg', Error), env, argOrd'', subst)
 
-    inferExpr (TypeConstrainedExpr e ty) env argOrd subst  = do
+    inferExpr (TypeConstrainedExpr e ty) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
       case subtype (typeOf e') ty env' argOrd' subst'  of
         (False, _) -> do
@@ -447,22 +447,22 @@ infer decls = do
           return (e', env', argOrd', subst')
         (True, subst'') -> return (e', env', argOrd', subst'')
 
-    inferExpr (ListExpr es) env argOrd subst  = do
+    inferExpr (ListExpr es) env argOrd subst = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
       (ty, subst'') <- unifyTypes (List.map snd es') env argOrd subst' 
       return ((TListExpr es', Array ty), env', argOrd', subst'')
       
-    inferExpr (TupleExpr es) env argOrd subst  = do
+    inferExpr (TupleExpr es) env argOrd subst = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
       return ((TTupleExpr es', Tuple (List.map snd es')), env', argOrd', subst')
       
-    inferExpr (SetExpr es) env argOrd subst  = do
+    inferExpr (SetExpr es) env argOrd subst = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
       (ty, subst'') <- unifyTypes (List.map snd es') env argOrd subst' 
       return ((TSetExpr es', Set ty), env', argOrd', subst'')
 
-    inferExpr (RecordExpr fields) env argOrd subst  = do
-      let f (name, e) env argOrd subst  = do
+    inferExpr (RecordExpr fields) env argOrd subst = do
+      let f (name, e) env argOrd subst = do
             (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
             return ((name, e'), env', argOrd', subst')
       (fields', env', argOrd', subst') <- inferList f env argOrd subst fields
@@ -480,7 +480,7 @@ infer decls = do
       return ((TLambdaExpr mes' s', mkArrowType (List.map snd mes') ty), env'', argOrd', subst''')
 
     mergeReturns :: TypedStatement -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
-    mergeReturns s env argOrd subst  =
+    mergeReturns s env argOrd subst =
       let types = returns s
       in unifyTypes types env argOrd subst 
       where
@@ -500,7 +500,7 @@ infer decls = do
         returns (TReturnStatement te) = [typeOf te]
         returns _ = []
 
-    inferLValueExpr tm (VarExpr name) env argOrd subst  =
+    inferLValueExpr tm (VarExpr name) env argOrd subst =
       case tm of
         Just t -> -- Writing to variable
           return ((TVarExpr name, t), Map.insert name t env, subst)
@@ -518,7 +518,7 @@ infer decls = do
             find subst ty = ty
 
     -- TODO: Test this function
-    inferLValueExpr tm (FieldAccessExpr lve field) env argOrd subst  = do
+    inferLValueExpr tm (FieldAccessExpr lve field) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst 
       case tm of
         Just t -> do -- Writing to variable
@@ -534,7 +534,7 @@ infer decls = do
               return ((TFieldAccessExpr lve' field, Error), env, subst)
 
     -- TODO: Test this function
-    inferLValueExpr tm (ArrayAccessExpr lve e) env argOrd subst  = do
+    inferLValueExpr tm (ArrayAccessExpr lve e) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst 
       (e', env'', argOrd', subst'') <- inferExpr e env' argOrd subst' 
       case tm of
