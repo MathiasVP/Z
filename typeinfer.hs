@@ -533,30 +533,23 @@ infer decls = do
               putStrLn $ field ++ " is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst)
 
-    -- TODO: Test this function
-    inferLValueExpr tm (ArrayAccessExpr lve e) env argOrd subst = do
+    inferLValueExpr _ (ArrayAccessExpr lve e) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst 
       (e', env'', argOrd', subst'') <- inferExpr e env' argOrd subst' 
-      case tm of
-        Just t -> do -- Writing to variable
-          (_, subst''') <- unify (typeOf lve') (Array t) env argOrd subst'' 
-          (_, subst'''') <- unify (typeOf e') IntType env argOrd subst''' 
-          return ((TArrayAccessExpr lve' e', t), env'', subst'''')
-        Nothing -> do -- Reading from variable
-          arrayTy <- mkTypeVar
-          case unify' (typeOf lve') (Array arrayTy) env'' argOrd' subst''  of
-            Just (_, subst''') ->
-              case unify' (typeOf e') IntType env'' argOrd' subst'''  of
-                Just (_, subst'''') ->
-                  return ((TArrayAccessExpr lve' e', arrayTy), env'', subst'''')
-                Nothing -> do
-                  putStrLn $ "Couldn't match expected type '" ++ (show IntType) ++
-                             "' with actual type '" ++ show (typeOf e') ++ "'."
-                  return ((TArrayAccessExpr lve' e', Error), env'', subst)
+      arrayTy <- mkTypeVar
+      case unify' (typeOf lve') (Array arrayTy) env'' argOrd' subst''  of
+        Just (_, subst''') ->
+          case unify' (typeOf e') IntType env'' argOrd' subst'''  of
+            Just (_, subst'''') ->
+              return ((TArrayAccessExpr lve' e', arrayTy), env'', subst'''')
             Nothing -> do
-              putStrLn $ "Couldn't match expected array type with with actual type '" ++
-                         show (Array arrayTy) ++ "'."
+              putStrLn $ "Couldn't match expected type '" ++ (show IntType) ++
+                         "' with actual type '" ++ show (typeOf e') ++ "'."
               return ((TArrayAccessExpr lve' e', Error), env'', subst)
+        Nothing -> do
+          putStrLn $ "Couldn't match expected array type with with actual type '" ++
+                     show (typeOf lve') ++ "'."
+          return ((TArrayAccessExpr lve' e', Error), env'', subst)
   
     replaceType subst ty =
       let replace trace IntType = IntType
