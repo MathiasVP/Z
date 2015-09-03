@@ -138,7 +138,7 @@ nameType = do
             else if name == "String" then Just StringType
             else Nothing
     tys <- option [] (char '<' >> sepBy1 type_ (spaces' >> char ',' >> spaces') <* char '>')
-    spaces
+    spaces'
     return $ fromMaybe (Name name tys) t
 
 arrowType :: IParser Type
@@ -158,6 +158,7 @@ simpleType = arrayType
          <|> nameType
   
 -- Statements
+statement :: IParser Statement
 statement = try ifStatement
         <|> try whileStatement
         <|> try forStatement
@@ -180,9 +181,8 @@ ifStatement = withPos $ do
     spaces
     return $ makeIf e s s'
   where    
-    makeIf e s sm = case sm of
-                      Nothing -> IfStatement e (makeCompound s) Nothing
-                      Just s' -> IfStatement e (makeCompound s) (Just (makeCompound s'))
+    makeIf e sThen sElseM =
+      IfStatement e (makeCompound sThen) (liftM makeCompound sElseM)
 
     ifHeader = do
         string "if"
@@ -207,7 +207,9 @@ ifStatement = withPos $ do
         -- If there is an else statement that's indented further than the current indentation
         --   then report an error.
         -- Otherwise we do nothing.
-        x <- lookAhead ((checkIndent >> (elseHeader True)) <|> (indented >> (elseHeader False)) <|> (return Nothing))
+        x <- lookAhead ((checkIndent >> (elseHeader True))
+                    <|> (indented >> (elseHeader False))
+                    <|> return Nothing)
         case x of
           Just True ->
             elseHeader () >>
@@ -394,7 +396,7 @@ primaryExpr = do
     spaces'
     t <- maybeType
     spaces'
-    return $ maybe e (\t -> TypeConstrainedExpr e t) t
+    return $ maybe e (TypeConstrainedExpr e) t
   where
     primaryExpr' = literalExpr
                <|> listExpr

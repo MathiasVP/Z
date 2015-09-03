@@ -440,12 +440,12 @@ infer decls = do
 
     inferExpr (TypeConstrainedExpr e ty) env argOrd subst  = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
-      case unify' (typeOf e') ty env' argOrd' subst'  of
-        Nothing -> do
+      case subtype (typeOf e') ty env' argOrd' subst'  of
+        (False, _) -> do
           putStrLn $ "Couldn't match expected type '" ++ show ty ++
                      "' with actual type '" ++ show (typeOf e') ++ "'."
           return (e', env', argOrd', subst')
-        Just (t, subst'') -> return (e', env', argOrd', subst'')
+        (True, subst'') -> return (e', env', argOrd', subst'')
 
     inferExpr (ListExpr es) env argOrd subst  = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
