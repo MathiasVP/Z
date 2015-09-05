@@ -20,12 +20,30 @@ makeForall subst (TypeVar u) ty =
     _         -> ty
 makeForall _ _ ty = ty
 
-mkAllOfType :: Env -> ArgOrd -> Substitution -> [Type] -> IO (Type, Substitution)
-mkAllOfType env argOrd subst types = do
+makeIntersectionType :: Env -> ArgOrd -> Substitution -> [Type] -> IO (Type, Substitution)
+makeIntersectionType env argOrd subst types = do
   u <- mkTypeVar
-  (_, subst') <- unify u (AllOf types) env argOrd subst
+  (_, subst') <- unify u (Intersection types) env argOrd subst
   return (u, subst')
 
+makeRecord :: Env -> ArgOrd -> Substitution -> Bool -> [(String, Type)] -> IO (Type, Substitution)
+makeRecord env argOrd subst b fields = do
+  u <- mkTypeVar
+  (_, subst') <- unify u (Record b fields) env argOrd subst
+  return (u, subst')
+
+extendRecord :: String -> Type -> Type -> Substitution -> Substitution
+extendRecord name ty (TypeVar u) subst =
+  case follow subst (TypeVar u) of
+    Record b fields
+      | isNothing (List.lookup name fields) ->
+        Map.insert u (Record b ((name, ty):fields)) subst
+      | otherwise -> Map.insert u (Record b (List.map f fields)) subst
+        where f (name', ty')
+                | name' == name = (name', ty)
+                | otherwise     = (name', ty')
+    TypeVar u' -> Map.insert u' (Record True [(name, ty)]) subst
+  
 normaliseFields :: Ord a => [(a, b)] -> [(a, b)]
 normaliseFields = List.sortBy (comparing fst)
 
@@ -148,7 +166,7 @@ infer decls = do
     inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst = do
       (fields', env', argOrd', subst') <-
         case tm of
-          Just (Record fields') ->
+          Just (Record _ fields') ->
             if equalRecordFields fields fields' then
               let typesm = List.map (Just . typeOf) (normaliseFields fields')
                   f tm (name, me) env argOrd subst = do
@@ -163,7 +181,7 @@ infer decls = do
             types <- replicateM (List.length fields) mkTypeVar
             let fields' = List.zip (normaliseFields fields) types
             let mkField ((s, _), ty) = (s, ty)
-            (_, subst') <- unify (TypeVar u) (Record (List.map mkField fields')) env argOrd subst 
+            (_, subst') <- unify (TypeVar u) (Record False (List.map mkField fields')) env argOrd subst 
             let f ((name, me), ty) env argOrd subst = do
                 (me', env', argOrd', subst') <- inferMatchExpr (Just ty) me env argOrd subst 
                 return ((name, me'), env', argOrd', subst')
@@ -174,7 +192,8 @@ infer decls = do
                   return ((name, me'), Map.insert name (typeOf me') env, argOrd', subst')
             in inferList f env argOrd subst fields
       let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
-      return ((TRecordMatchExpr fields', Record recordTypes), env', argOrd', subst')
+      (recordTy, subst'') <- makeRecord env' argOrd' subst' False recordTypes
+      return ((TRecordMatchExpr fields', recordTy), env', argOrd', subst'')
 
     inferMatchExpr tm (TypedMatchExpr me ty) env argOrd subst = do
       (me', env', argOrd', subst') <- inferMatchExpr tm me env argOrd subst 
@@ -229,7 +248,7 @@ infer decls = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       t <- mkTypeVar
       (t', subst') <-
-        case unify' (typeOf e') (AllOf [Array t, Set t]) envExpr argOrd' substExpr  of
+        case unify' (typeOf e') (Intersection [Array t, Set t]) envExpr argOrd' substExpr  of
           Just (_, subst') -> return (t, subst')
           Nothing -> do
             putStrLn $ "Error: Cannot iterate over expression of type '" ++
@@ -289,7 +308,7 @@ infer decls = do
       return ((mkeExpr e1' e2', t), env2, argOrd2, subst')
     
     mkMathOpType e1 e2 env argOrd subst = do
-      (expectedType, subst') <- mkAllOfType env argOrd subst [IntType, RealType] 
+      (expectedType, subst') <- makeIntersectionType env argOrd subst [IntType, RealType] 
       case unify' (typeOf e1) expectedType env argOrd subst'  of
         Just (t1, subst1) ->
           case unify' (typeOf e2) expectedType env argOrd subst1  of
@@ -340,7 +359,7 @@ infer decls = do
           return (Error, subst)
 
     mkRelOpType e1 e2 env argOrd subst = do
-      (expectedType, subst') <- mkAllOfType env argOrd subst [IntType, RealType] 
+      (expectedType, subst') <- makeIntersectionType env argOrd subst [IntType, RealType] 
       case unify' (typeOf e1) expectedType env argOrd subst of
         Just (_, subst1) -> do
           case unify' (typeOf e2) expectedType env argOrd subst1 of
@@ -405,7 +424,7 @@ infer decls = do
 
     inferExpr (UnaryMinusExpr e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
-      case unify' (typeOf e') (AllOf [IntType, RealType]) env' argOrd' subst'  of
+      case unify' (typeOf e') (Intersection [IntType, RealType]) env' argOrd' subst'  of
         Just (t, subst'') -> return ((TUnaryMinusExpr e', t), env', argOrd', subst'')
         Nothing -> do putStrLn $ "Couldn't match expected type 'Int' or 'Real' with actual type '" ++
                                  show (typeOf e') ++ "'."
@@ -467,7 +486,8 @@ infer decls = do
             return ((name, e'), env', argOrd', subst')
       (fields', env', argOrd', subst') <- inferList f env argOrd subst fields
       let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
-      return ((TRecordExpr fields', Record recordTypes), env', argOrd', subst')
+      (recordTy, subst'') <- makeRecord env' argOrd' subst' False recordTypes
+      return ((TRecordExpr fields', recordTy), env', argOrd', subst'')
 
     inferExpr (LValue lve) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst 
@@ -499,7 +519,7 @@ infer decls = do
           List.concatMap (returns . snd) actions
         returns (TReturnStatement te) = [typeOf te]
         returns _ = []
-
+        
     inferLValueExpr tm (VarExpr name) env argOrd subst =
       case tm of
         Just t -> -- Writing to variable
@@ -507,30 +527,25 @@ infer decls = do
         Nothing -> -- Reading from variable
           case Map.lookup name env of
             Just ty ->
-              return ((TVarExpr name, find subst ty), env, subst)
+              return ((TVarExpr name, ty), env, subst)
             Nothing -> do
               putStrLn $ "Not in scope: " ++ name
               return ((TVarExpr name, Error), env, subst)
-      where find subst (TypeVar u) =
-              case Map.lookup u subst of
-                Just ty -> find subst ty
-                Nothing -> (TypeVar u)
-            find subst ty = ty
 
-    -- TODO: Test this function
     inferLValueExpr tm (FieldAccessExpr lve field) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst 
       case tm of
         Just t -> do -- Writing to variable
-          (_, subst'') <- unify (typeOf lve') (Record [(field, t)]) env argOrd subst' 
+          (_, subst'') <- unify (typeOf lve') (Record False [(field, t)]) env argOrd subst' 
           return ((TFieldAccessExpr lve' field, t), env', subst'')
         Nothing -> do -- Reading from variable
           u <- mkTypeVar
-          case unify' (typeOf lve') (Record [(field, u)]) env' argOrd subst'  of
-            Just (_, subst'') ->
-              return ((TFieldAccessExpr lve' field, u), env', subst'')
-            Nothing -> do
-              putStrLn $ field ++ " is not a field of type '" ++ show (typeOf lve') ++ "'"
+          case subtype (Record True [(field, u)]) (typeOf lve') env' argOrd subst'  of
+            (True, subst'') ->
+              let subst''' = extendRecord field u (typeOf lve') subst''
+              in return ((TFieldAccessExpr lve' field, u), env', subst''')
+            (False, _) -> do
+              putStrLn $ "'" ++ field ++ "' is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst)
 
     inferLValueExpr _ (ArrayAccessExpr lve e) env argOrd subst = do
@@ -561,8 +576,8 @@ infer decls = do
           replace trace (Tuple [ty]) = replace trace ty
           replace trace (Tuple types) = Tuple (List.map (replace trace) types)
           replace trace (Set ty) = Set (replace trace ty)
-          replace trace (Record fields) =
-            Record (List.map (\(s, ty) -> (s, replace trace ty)) fields)
+          replace trace (Record b fields) =
+            Record b (List.map (\(s, ty) -> (s, replace trace ty)) fields)
           replace trace (Arrow tDom tCod) = Arrow (replace trace tDom) (replace trace tCod)
           replace trace (Union t1 t2) = Union (replace trace t1) (replace trace t2)
           replace trace (Forall u ty) =
@@ -578,7 +593,7 @@ infer decls = do
                     | otherwise -> replace (Set.insert u trace) (TypeVar u')
                   t -> replace (Set.insert u trace) t
           replace trace Error = Error
-          replace trace (AllOf types) = AllOf (List.map (replace trace) types)
+          replace trace (Intersection types) = Intersection (List.map (replace trace) types)
       in replace Set.empty ty
 
     replaceDecl subst td =

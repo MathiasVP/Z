@@ -127,7 +127,7 @@ recordType = do
     spaces
     char '}'
     spaces
-    return $ Record ts
+    return $ Record False ts
 
 nameType :: IParser Type
 nameType = do

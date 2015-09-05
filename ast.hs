@@ -11,13 +11,13 @@ data Type
   | Array Type
   | Tuple [Type]
   | Set Type
-  | Record [(String, Type)]
+  | Record Bool [(String, Type)]
   | Forall Unique Type
   | Arrow Type Type
   | Union Type Type
+  | Intersection [Type]
   | TypeVar Unique
   | Error
-  | AllOf [Type]
     deriving (Show, Eq, Ord)
     
 instance Show Unique where
