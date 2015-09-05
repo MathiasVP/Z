@@ -1,14 +1,14 @@
 module Unification where
+import Control.Monad
+import Data.Ord
+import qualified Data.Set as Set
+import qualified Data.Map as Map
+import qualified Data.Maybe as Maybe
 import qualified Data.Unique as U
 import qualified Data.List as List
 import Data.Set (Set)
-import qualified Data.Set as Set
-import qualified Data.Map as Map
-import Data.Map ((!))
 import Data.Map (Map)
-import Data.Maybe as Maybe
-import Control.Monad
-import Data.Ord
+import Data.Map ((!))
 import Ast
 import TypedAst
 
@@ -52,7 +52,6 @@ follow subst (TypeVar u) =
     Just (Name s types) -> Name s types
     Just (Array ty) -> Array (follow subst ty)
     Just (Tuple types) -> Tuple (List.map (follow subst) types)
-    Just (Set ty) -> Set (follow subst ty)
     Just (Record b fields) -> let f (s, ty) = (s, follow subst ty)
                             in Record b (List.map f fields)
     Just (Arrow tDom tCod) -> Arrow (follow subst tDom) (follow subst tCod)
@@ -135,9 +134,6 @@ unify t1 t2 env argOrd subst =
         (types, subst') <- unifyPairwise trace bind1 bind2 types1 types2 subst 
         return (Tuple types, subst')
       else return (Union (Tuple types1) (Tuple types2), subst)
-    uni trace bind1 bind2 (Set t1) (Set t2) subst = do
-      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
-      return (Set t, subst')
     uni trace bind1 bind2 (Record b1 fields1) (Record b2 fields2) subst = do
       (types, subst') <- unifyPairwise trace bind1 bind2 types1 types2 subst
       let fields = List.zip names1 types
@@ -251,10 +247,6 @@ unify' t1 t2 env argOrd subst =
       case unifyPairwise' trace bind1 bind2 types1 types2 subst of
         Just (types, subst') -> Just (Tuple types, subst')
         Nothing -> Nothing
-    uni' trace bind1 bind2 (Set t1) (Set t2) subst =
-      case uni' trace bind1 bind2 t1 t2 subst of
-        Just (t, subst') -> Just (Set t, subst')
-        Nothing -> Nothing
     uni' trace bind1 bind2 (Record b1 fields1) (Record b2 fields2) subst
       | names1 == names2 =
         case unifyPairwise' trace bind1 bind2 types1 types2 subst of
@@ -360,7 +352,6 @@ instansiate name ty t =
       inst (Tuple tys) = Tuple (List.map inst tys)
       inst (Record b fields) = Record b (List.map (\(s, ty) -> (s, inst ty)) fields)
       inst (Array ty) = Array (inst ty)
-      inst (Set ty) = Set (inst ty)
       inst (TypeVar u) = TypeVar u
       inst Error = Error
       inst IntType = IntType
@@ -394,7 +385,6 @@ variance env argOrd t s =
       var trace v (Tuple ts) = lub' (List.map (var trace v) ts)
       var trace v (Record b fields) = lub' (List.map (var trace v . snd) fields)
       var trace v (Array ty) = var trace v ty
-      var trace v (Set ty) = var trace v ty
       var trace v (Intersection ts) = lub' (List.map (var trace v) ts)
       var trace v _ = v
   in var Set.empty Bottom t
@@ -492,7 +482,6 @@ subtype t1 t2 env argOrd subst =
       where f (t1, t2) (True, subst) = sub trace bind1 bind2 assum subst t1 t2
             f _ (False, subst) = (False, subst)
     sub trace bind1 bind2 assum subst (Array t1) (Array t2) = sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Set t1) (Set t2) = sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst (Record _ fields1) (Record b2 fields2) =
       List.foldr f (True, subst) fields1
       where f (name, ty) (b, subst) =

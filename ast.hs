@@ -10,7 +10,6 @@ data Type
   | Name String [Type]
   | Array Type
   | Tuple [Type]
-  | Set Type
   | Record Bool [(String, Type)]
   | Forall Unique Type
   | Arrow Type Type
@@ -49,7 +48,6 @@ data Expr = IntExpr Int
           | TypeConstrainedExpr Expr Type
           | ListExpr [Expr]
           | TupleExpr [Expr]
-          | SetExpr [Expr]
           | RecordExpr [(String, Expr)]
           | LValue LValueExpr
           | LambdaExpr [MatchExpr] Statement
@@ -57,7 +55,6 @@ data Expr = IntExpr Int
 
 data MatchExpr = TupleMatchExpr [MatchExpr]
                | ListMatchExpr [MatchExpr]
-               | SetMatchExpr [MatchExpr]
                | RecordMatchExpr [(String, MatchExpr)]
                | TypedMatchExpr MatchExpr Type
                | VarMatch String

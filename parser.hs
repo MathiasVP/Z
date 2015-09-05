@@ -98,16 +98,6 @@ tupleType = do
     char ')'
     spaces
     return $ Tuple ts
-
-setType :: IParser Type
-setType = do
-    char '{'
-    spaces
-    t <- type_
-    spaces
-    char '}'
-    spaces
-    return $ Set t
  
 recField :: IParser (String, Type)
 recField = do
@@ -153,7 +143,6 @@ arrow = do
 simpleType :: IParser Type
 simpleType = arrayType
          <|> tupleType
-         <|> try setType
          <|> recordType
          <|> nameType
   
@@ -401,7 +390,7 @@ primaryExpr = do
     primaryExpr' = literalExpr
                <|> listExpr
                <|> tupleExpr
-               <|> setOrRecordExpr
+               <|> recordExpr
                <|> try lambdaExpr
                <|> try ((return LValue) <*> lvalueExpr)
                
@@ -470,32 +459,22 @@ tupleExpr = do
     spaces'
     return $ TupleExpr exprs
     
-setOrRecordExpr :: IParser Expr
-setOrRecordExpr = try recordExpr
-              <|> setExpr
-  where setExpr = do
-            char '{'
-            spaces'
-            exprs <- sepBy expr (spaces' >> char ',' >> spaces')
-            spaces'
-            char '}'
-            spaces'
-            return $ SetExpr exprs
-        recordExpr = do
-            char '{'
-            spaces'
-            exprs <- sepBy1 recFieldAssign (spaces' >> char ',' >> spaces')
-            spaces'
-            char '}'
-            spaces'
-            return $ RecordExpr exprs
-        recFieldAssign = do
-            name <- id_
-            spaces'
-            char '='
-            spaces'
-            e <- expr
-            return (name, e)
+recordExpr :: IParser Expr
+recordExpr = do
+  char '{'
+  spaces'
+  exprs <- sepBy1 recFieldAssign (spaces' >> char ',' >> spaces')
+  spaces'
+  char '}'
+  spaces'
+  return $ RecordExpr exprs
+  where recFieldAssign = do
+        name <- id_
+        spaces'
+        char '='
+        spaces'
+        e <- expr
+        return (name, e)
     
 lvalueExpr :: IParser LValueExpr
 lvalueExpr = do
@@ -509,6 +488,7 @@ lvalueExpr = do
             name <- id_
             spaces'
             return (\x -> FieldAccessExpr x name)
+            
         brackets = do
             char '['
             spaces'
@@ -539,12 +519,12 @@ matchExpr = do
   where
     matchExpr' = tupleMatchExpr
              <|> listMatchExpr
-             <|> setOrRecordMatchExpr
-             <|> varMatchExpr
+             <|> recordMatchExpr
              -- 'try' since '-' will also be matched in a function declaration's return type signature
              <|> try intMatchExpr
              <|> stringMatchExpr
              <|> boolMatchExpr
+             <|> varMatchExpr
              <|> parenthesisMatchExpr
 
 parenthesisMatchExpr :: IParser MatchExpr
@@ -573,16 +553,9 @@ listMatchExpr = do
     spaces'
     return $ ListMatchExpr exprs
     
-setOrRecordMatchExpr :: IParser MatchExpr
-setOrRecordMatchExpr = try matchRecordExpr
-                   <|> matchSetExpr
+recordMatchExpr :: IParser MatchExpr
+recordMatchExpr = matchRecordExpr
   where
-    matchSetExpr = do
-        char '{'
-        exprs <- sepBy matchExpr (spaces' >> char ',' >> spaces')
-        char '}'
-        spaces'
-        return $ SetMatchExpr exprs
     matchRecordExpr = do
         char '{'
         exprs <- sepBy1 recFieldAssign (spaces' >> char ',' >> spaces')

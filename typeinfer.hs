@@ -1,14 +1,14 @@
 module TypeInfer where
-import qualified Data.List as List
-import Data.Map (Map)
-import qualified Data.Map as Map
-import Data.Set (Set)
-import qualified Data.Set as Set
 import Control.Monad
+import Data.Ord
+import qualified Data.List as List
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+import qualified Data.Maybe as Maybe
+import Data.Set (Set)
+import Data.Map (Map)
 import TypedAst
 import Unification
-import Data.Maybe as Maybe
-import Data.Ord
 
 mkArrowType :: [Type] -> Type -> Type
 mkArrowType types retTy = List.foldr Arrow retTy types
@@ -36,7 +36,7 @@ extendRecord :: String -> Type -> Type -> Substitution -> Substitution
 extendRecord name ty (TypeVar u) subst =
   case follow subst (TypeVar u) of
     Record b fields
-      | isNothing (List.lookup name fields) ->
+      | Maybe.isNothing (List.lookup name fields) ->
         Map.insert u (Record b ((name, ty):fields)) subst
       | otherwise -> Map.insert u (Record b (List.map f fields)) subst
         where f (name', ty')
@@ -151,18 +151,6 @@ infer decls = do
       (ty, subst'') <- unifyTypes (List.map typeOf mes') env argOrd subst'
       return ((TListMatchExpr mes', Array ty), env', argOrd', subst'')
       
-    inferMatchExpr tm (SetMatchExpr mes) env argOrd subst = do
-      (mes', env', argOrd', subst') <-
-        case tm of
-          Just (Set t) -> inferList (inferMatchExpr (Just t)) env argOrd subst mes
-          Just (TypeVar u) -> do
-            base <- mkTypeVar
-            (_, subst') <- unify (TypeVar u) (Set base) env argOrd subst 
-            inferList (inferMatchExpr (Just base)) env argOrd subst'  mes
-          Nothing -> inferList (inferMatchExpr Nothing) env argOrd subst mes
-      (ty, subst'') <- unifyTypes (List.map typeOf mes') env argOrd subst' 
-      return ((TSetMatchExpr mes', Set ty), env', argOrd', subst'')
-      
     inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst = do
       (fields', env', argOrd', subst') <-
         case tm of
@@ -248,7 +236,7 @@ infer decls = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
       t <- mkTypeVar
       (t', subst') <-
-        case unify' (typeOf e') (Intersection [Array t, Set t]) envExpr argOrd' substExpr  of
+        case unify' (typeOf e') (Array t) envExpr argOrd' substExpr  of
           Just (_, subst') -> return (t, subst')
           Nothing -> do
             putStrLn $ "Error: Cannot iterate over expression of type '" ++
@@ -275,17 +263,15 @@ infer decls = do
       (lve', env', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve env argOrd' substExpr 
       return (TAssignStatement (Right lve') e', env', argOrd', substLValueExpr)
 
+    -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
-      (mes', env', _, subst') <- inferList (f (typeOf e')) envExpr argOrd' substExpr mes
-      return (TMatchStatement e' mes', env', argOrd', subst')
-      where f matchType (me, s) env argOrd subst = do
-              (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst 
-              (ty, subst') <- unify matchType (typeOf me') env argOrd subst' 
-              let subst'' = case matchType of
-                              TypeVar u -> Map.insert u ty subst'
-              (s', env'', argOrd'', subst''') <- inferStatement s env' argOrd' subst''
-              return ((me', s'), env'', argOrd'', subst''')
+      mes' <- mapM (f (typeOf e') envExpr argOrd' substExpr) mes
+      return (TMatchStatement e' undefined, env, argOrd', undefined)
+      where f matchType env argOrd subst (me, s) = do
+              (me', env', _, subst') <- inferMatchExpr Nothing me env argOrd subst
+              (ty, subst'') <- unify matchType (typeOf me') env argOrd subst'
+              return (me', env', subst')
                 
     inferStatement (ReturnStatement e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
@@ -474,11 +460,6 @@ infer decls = do
     inferExpr (TupleExpr es) env argOrd subst = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
       return ((TTupleExpr es', Tuple (List.map snd es')), env', argOrd', subst')
-      
-    inferExpr (SetExpr es) env argOrd subst = do
-      (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
-      (ty, subst'') <- unifyTypes (List.map snd es') env argOrd subst' 
-      return ((TSetExpr es', Set ty), env', argOrd', subst'')
 
     inferExpr (RecordExpr fields) env argOrd subst = do
       let f (name, e) env argOrd subst = do
@@ -575,7 +556,6 @@ infer decls = do
           replace trace (Array ty) = Array ((replace trace) ty)
           replace trace (Tuple [ty]) = replace trace ty
           replace trace (Tuple types) = Tuple (List.map (replace trace) types)
-          replace trace (Set ty) = Set (replace trace ty)
           replace trace (Record b fields) =
             Record b (List.map (\(s, ty) -> (s, replace trace ty)) fields)
           replace trace (Arrow tDom tCod) = Arrow (replace trace tDom) (replace trace tCod)
