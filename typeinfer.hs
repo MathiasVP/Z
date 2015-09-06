@@ -116,69 +116,66 @@ infer decls = do
                      "' with actual type '" ++ show infRetTy ++ "'."
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
 
+    -- TODO: Test this
     inferMatchExpr tm (TupleMatchExpr mes) env argOrd subst = do
-      (mes', env', argOrd', subst') <-
-        case tm of
-          Just (Tuple ts) ->
-            if List.length ts == List.length mes then
-              let mesWithTypes = case tm of
-                                  Just (Tuple ts) ->
-                                    List.map inferMatchExpr (List.map Just ts)
-                                  Nothing -> []
-                  f (me, n) = (mesWithTypes !! n) me
-              in inferList f env argOrd subst (List.zip mes [0..])
-            else do putStrLn $ "Match error: Couldn't unify expression '" ++
-                               show (TupleMatchExpr mes) ++ "' with type '" ++
-                               show (Tuple ts) ++ "'."
-                    return ([], env, argOrd, subst)
-          Just (TypeVar u) -> do
-            types <- replicateM (List.length mes) mkTypeVar
-            (_, subst') <- unify (TypeVar u) (Tuple types) env argOrd subst 
-            inferList (\(me, ty) -> inferMatchExpr (Just ty) me) env argOrd subst' (List.zip mes types)
+      let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
+      (mes', env', argOrd', subst') <- do
+        types <- replicateM (List.length mes) mkTypeVar
+        case liftM (uni' env argOrd subst (Tuple types)) tm of
+          Just (Just (Tuple ts, subst')) ->
+            inferList (\(me, t) -> inferMatchExpr (Just t) me) env argOrd subst'
+                                        (List.zip mes ts)
+          Just Nothing -> do
+            putStrLn $ "Match error: Couldn't unify expression '" ++
+                         show (TupleMatchExpr mes) ++ "' with type '" ++
+                         show (Tuple types) ++ "'."
+            return ([], env, argOrd, subst)
           Nothing ->
             inferList (inferMatchExpr Nothing) env argOrd subst mes
       return ((TTupleMatchExpr mes', Tuple (List.map typeOf mes')), env', argOrd', subst')
 
     inferMatchExpr tm (ListMatchExpr mes) env argOrd subst = do
+      let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
+      t <- mkTypeVar
       (mes', env', argOrd', subst') <-
-        case tm of
-          Just (Array t) -> inferList (inferMatchExpr (Just t)) env argOrd subst mes
-          Just (TypeVar u) -> do
-            base <- mkTypeVar
-            (_, subst') <- unify (TypeVar u) (Array base) env argOrd subst
-            inferList (inferMatchExpr (Just base)) env argOrd subst' mes
+        case liftM (uni' env argOrd subst (Array t)) tm of
+          Just (Just (Array t, subst')) -> inferList (inferMatchExpr (Just t))
+                                             env argOrd subst' mes
+          Just Nothing -> do
+            putStrLn $ "Match error: Couldn't unify expression '" ++
+                         show (ListMatchExpr mes) ++ "' with type '" ++
+                         show (Array t) ++ "'."
+            return ([], env, argOrd, subst)
           Nothing -> inferList (inferMatchExpr Nothing) env argOrd subst mes
-      (ty, subst'') <- unifyTypes (List.map typeOf mes') env argOrd subst'
+      (ty, subst'') <- unifyTypes (List.map typeOf mes') env' argOrd' subst'
       return ((TListMatchExpr mes', Array ty), env', argOrd', subst'')
       
     inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst = do
-      (fields', env', argOrd', subst') <-
-        case tm of
-          Just (Record _ fields') ->
-            if equalRecordFields fields fields' then
-              let typesm = List.map (Just . typeOf) (normaliseFields fields')
+      let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
+      (fields', env', argOrd', subst') <- do
+        fields' <- forever mkTypeVar >>=
+                     return . List.zip (normaliseFields fields)
+        let record = Record False (List.map (\((s, _), ty) -> (s, ty)) fields')
+        case liftM (uni' env argOrd subst record) tm of
+          Just (Just (Record _ fields', subst')) ->
+            inferList (\(entry, ty) -> f (Just ty) entry) env argOrd
+              subst' (List.zip (normaliseFields fields) typesm)
+            where typesm = List.map typeOf (normaliseFields fields')
                   f tm (name, me) env argOrd subst = do
-                    (me', env', argOrd', subst') <- inferMatchExpr tm me env argOrd subst 
+                    (me', env', argOrd', subst') <-
+                      inferMatchExpr tm me env argOrd subst 
                     return ((name, me'), env', argOrd', subst')
-                  fs = List.map f typesm
-                  inferField (entry, n) = (fs !! n) entry
-              in inferList inferField env argOrd subst (List.zip (normaliseFields fields) [0..])
-            else
-              return ([], env, argOrd, subst)
-          Just (TypeVar u) -> do
-            types <- replicateM (List.length fields) mkTypeVar
-            let fields' = List.zip (normaliseFields fields) types
-            let mkField ((s, _), ty) = (s, ty)
-            (_, subst') <- unify (TypeVar u) (Record False (List.map mkField fields')) env argOrd subst 
-            let f ((name, me), ty) env argOrd subst = do
-                (me', env', argOrd', subst') <- inferMatchExpr (Just ty) me env argOrd subst 
-                return ((name, me'), env', argOrd', subst')
-            inferList f env argOrd subst' fields'
-          Nothing ->
-            let f (name, me) env argOrd subst = do
-                  (me', env, argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst 
-                  return ((name, me'), Map.insert name (typeOf me') env, argOrd', subst')
-            in inferList f env argOrd subst fields
+          Just Nothing -> do
+            putStrLn $ "Match error: Couldn't unify expression '" ++
+                         show (RecordMatchExpr fields) ++ "' with type '" ++
+                         show record ++ "'."
+            return ([], env, argOrd, subst)
+          Nothing -> inferList f env argOrd subst fields
+            where f (name, me) env argOrd subst = do
+                    (me', env, argOrd', subst') <- inferMatchExpr Nothing me
+                                                     env argOrd subst
+                    let env' = Map.insert name (typeOf me') env
+                    return ((name, me'), env', argOrd', subst')
       let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
       (recordTy, subst'') <- makeRecord env' argOrd' subst' False recordTypes
       return ((TRecordMatchExpr fields', recordTy), env', argOrd', subst'')
@@ -260,18 +257,23 @@ infer decls = do
 
     inferStatement (AssignStatement (Right lve) e) env argOrd subst = do
       (e', env, argOrd', substExpr) <- inferExpr e env argOrd subst 
-      (lve', env', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve env argOrd' substExpr 
+      (lve', env', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve
+                                         env argOrd' substExpr
       return (TAssignStatement (Right lve') e', env', argOrd', substLValueExpr)
 
     -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
-      mes' <- mapM (f (typeOf e') envExpr argOrd' substExpr) mes
-      return (TMatchStatement e' undefined, env, argOrd', undefined)
-      where f matchType env argOrd subst (me, s) = do
-              (me', env', _, subst') <- inferMatchExpr Nothing me env argOrd subst
-              (ty, subst'') <- unify matchType (typeOf me') env argOrd subst'
-              return (me', env', subst')
+      (mes', _, _, subst') <- inferList (f (typeOf e')) envExpr argOrd' substExpr mes
+      print mes'
+      return (TMatchStatement e' mes', env, argOrd, subst')
+      where f matchType (me, s) env argOrd subst = do
+              (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst 
+              (ty, subst') <- unify matchType (typeOf me') env argOrd subst' 
+              let subst'' = case matchType of
+                              TypeVar u -> Map.insert u ty subst'
+              (s', _, _, subst''') <- inferStatement s env' argOrd' subst''
+              return ((me', s'), env, argOrd, subst''')
                 
     inferStatement (ReturnStatement e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst 
