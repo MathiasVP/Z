@@ -40,26 +40,30 @@ unifyTypes types env argOrd subst = do
           unify ty ty' env argOrd subst 
 
 follow :: Substitution -> Type -> Type
-follow subst (TypeVar u) =
-  case Map.lookup u subst of
-    Nothing             -> TypeVar u
-    Just (TypeVar u')   -> if u == u' then TypeVar u'
-                           else follow subst (TypeVar u')
-    Just IntType        -> IntType
-    Just StringType     -> StringType
-    Just BoolType       -> BoolType
-    Just RealType       -> RealType
-    Just (Name s types) -> Name s types
-    Just (Array ty) -> Array (follow subst ty)
-    Just (Tuple types) -> Tuple (List.map (follow subst) types)
-    Just (Record b fields) -> let f (s, ty) = (s, follow subst ty)
-                            in Record b (List.map f fields)
-    Just (Arrow tDom tCod) -> Arrow (follow subst tDom) (follow subst tCod)
-    Just (Union t1 t2) -> Union (follow subst t1) (follow subst t2)
-    Just (Forall u ty) -> Forall u (follow subst ty)
-    Just Error -> Error
-    Just (Intersection types) -> Intersection (List.map (follow subst) types)
-follow subst t = t
+follow subst t =
+  let fol (TypeVar u) =
+        case Map.lookup u subst of
+          Just (TypeVar u') ->
+            if u == u' then TypeVar u'
+            else fol (TypeVar u')
+          Just t -> fol t
+          Nothing -> TypeVar u
+      fol IntType = IntType
+      fol StringType = StringType
+      fol BoolType = BoolType
+      fol RealType = RealType
+      fol (Name s types) = Name s types
+      fol (Array ty) = Array (fol ty)
+      fol (Tuple types) = Tuple (List.map (follow subst) types)
+      fol (Record b fields) =
+        let f (s, ty) = (s, fol ty)
+        in Record b (List.map f fields)
+      fol (Arrow tDom tCod) = Arrow (fol tDom) (fol tCod)
+      fol (Union t1 t2) = Union (fol t1) (fol t2)
+      fol (Forall u ty) = Forall u (fol ty)
+      fol Error = Error
+      fol (Intersection types) = Intersection (List.map (follow subst) types)
+  in fol t
 
 inserts :: Ord a => Set a -> [a] -> Set a
 inserts = List.foldr Set.insert

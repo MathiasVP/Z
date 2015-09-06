@@ -263,15 +263,16 @@ infer decls = do
 
     -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
-      (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst 
-      (mes', _, _, subst') <- inferList (f (typeOf e')) envExpr argOrd' substExpr mes
-      print mes'
-      return (TMatchStatement e' mes', env, argOrd, subst')
-      where f matchType (me, s) env argOrd subst = do
-              (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst 
-              (ty, subst') <- unify matchType (typeOf me') env argOrd subst' 
-              let subst'' = case matchType of
-                              TypeVar u -> Map.insert u ty subst'
+      (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst
+      t <- mkTypeVar
+      (_, subst') <- unify t (typeOf e') envExpr argOrd' substExpr
+      (mes', _, _, subst'') <- inferList (f t) envExpr argOrd' subst' mes
+      print (follow subst'' t)
+      return (TMatchStatement e' mes', env, argOrd, subst'')
+      where f (TypeVar u) (me, s) env argOrd subst = do
+              (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst
+              (ty, subst') <- unify (TypeVar u) (typeOf me') env argOrd subst'
+              let subst'' = Map.insert u ty subst'
               (s', _, _, subst''') <- inferStatement s env' argOrd' subst''
               return ((me', s'), env, argOrd, subst''')
                 
