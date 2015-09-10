@@ -15,7 +15,7 @@ import TypedAst
 type Substitution = Map U.Unique Type
 type Env = Map String Type
 
-mkTypeVar :: IO Type  
+mkTypeVar :: IO Type
 mkTypeVar = U.newUnique >>=
               return . TypeVar
 
@@ -37,33 +37,33 @@ unifyTypes types env argOrd subst = do
   t <- mkTypeVar
   foldM f (t, subst) types
   where f (ty, subst) ty' =
-          unify ty ty' env argOrd subst 
+          unify ty ty' env argOrd subst
 
 follow :: Substitution -> Type -> Type
-follow subst t =
-  let fol (TypeVar u) =
-        case Map.lookup u subst of
-          Just (TypeVar u') ->
-            if u == u' then TypeVar u'
-            else fol (TypeVar u')
-          Just t -> fol t
-          Nothing -> TypeVar u
-      fol IntType = IntType
-      fol StringType = StringType
-      fol BoolType = BoolType
-      fol RealType = RealType
-      fol (Name s types) = Name s types
-      fol (Array ty) = Array (fol ty)
-      fol (Tuple types) = Tuple (List.map (follow subst) types)
-      fol (Record b fields) =
-        let f (s, ty) = (s, fol ty)
-        in Record b (List.map f fields)
-      fol (Arrow tDom tCod) = Arrow (fol tDom) (fol tCod)
-      fol (Union t1 t2) = Union (fol t1) (fol t2)
-      fol (Forall u ty) = Forall u (fol ty)
-      fol Error = Error
-      fol (Intersection types) = Intersection (List.map (follow subst) types)
-  in fol t
+follow subst = fol
+  where
+    fol (TypeVar u) =
+      case Map.lookup u subst of
+        Just (TypeVar u') ->
+          if u == u' then TypeVar u'
+          else fol (TypeVar u')
+        Just t -> fol t
+        Nothing -> TypeVar u
+    fol IntType = IntType
+    fol StringType = StringType
+    fol BoolType = BoolType
+    fol RealType = RealType
+    fol (Name s types) = Name s types
+    fol (Array ty) = Array (fol ty)
+    fol (Tuple types) = Tuple (List.map fol types)
+    fol (Record b fields) =
+      let f (s, ty) = (s, fol ty)
+      in Record b (List.map f fields)
+    fol (Arrow tDom tCod) = Arrow (fol tDom) (fol tCod)
+    fol (Union t1 t2) = union (fol t1) (fol t2)
+    fol (Forall u ty) = Forall u (fol ty)
+    fol Error = Error
+    fol (Intersect t1 t2) = Intersect (fol t1) (fol t2)
 
 inserts :: Ord a => Set a -> [a] -> Set a
 inserts = List.foldr Set.insert
@@ -91,12 +91,12 @@ unify t1 t2 env argOrd subst =
     uni trace bind1 bind2 (TypeVar u) t subst =
       case follow subst (TypeVar u) of
         TypeVar u -> return (t, Map.insert u t subst)
-        t'        -> do (t'', subst') <- uni trace bind1 bind2 t t' subst 
+        t'        -> do (t'', subst') <- uni trace bind1 bind2 t t' subst
                         return (t'', Map.insert u t'' subst')
     uni trace bind1 bind2 t (TypeVar u) subst = uni trace bind1 bind2 (TypeVar u) t subst
     uni trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
       | Set.member s1 trace && Set.member s2 trace =
-        return (Union (instansiate' t1 bind1') (instansiate' t2 bind2'), subst)
+        return (union (instansiate' t1 bind1') (instansiate' t2 bind2'), subst)
       | Set.member s1 trace =
         uni (Set.insert s2 trace) bind1 bind2' t1 t2' subst
       | Set.member s2 trace =
@@ -109,74 +109,77 @@ unify t1 t2 env argOrd subst =
             bind2' = makeBindings argOrd s2 types2
     uni trace bind1 bind2 t1@(Name s types) t2 subst
       | Set.member s trace =
-        return (Union (instansiate' t1 bind) (instansiate' t2 bind2), subst)
+        return (union (instansiate' t1 bind) (instansiate' t2 bind2), subst)
       | otherwise =
         uni (Set.insert s trace) bind bind2 t t2 subst
       where t = lookup bind1 env s
             bind = makeBindings argOrd s types
     uni trace bind1 bind2 t1 t2@(Name s types) subst
       | Set.member s trace =
-        return (Union (instansiate' t1 bind1) (instansiate' t2 bind), subst)
+        return (union (instansiate' t1 bind1) (instansiate' t2 bind), subst)
       | otherwise =
         uni (Set.insert s trace) bind1 bind t1 t subst
       where t = lookup bind2 env s
             bind = makeBindings argOrd s types
     uni trace bind1 bind2 (Array t1) (Array t2) subst = do
-      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (Array t, subst')
     uni trace bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst = do
-      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (Tuple [t], subst')
     uni trace bind1 bind2 (Tuple [t1]) t2 subst = do
-      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (t, subst')
     uni trace bind1 bind2 t1 (Tuple [t2]) subst = do
-      (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
+      (t, subst') <- uni trace bind1 bind2 t1 t2 subst
       return (t, subst')
     uni trace bind1 bind2 (Tuple types1) (Tuple types2) subst =
       if List.length types1 == List.length types2 then do
-        (types, subst') <- unifyPairwise trace bind1 bind2 types1 types2 subst 
+        (types, subst') <- unifyPairwise trace bind1 bind2 types1 types2 subst
         return (Tuple types, subst')
-      else return (Union (Tuple types1) (Tuple types2), subst)
+      else return (union (Tuple types1) (Tuple types2), subst)
     uni trace bind1 bind2 (Record b1 fields1) (Record b2 fields2) subst = do
       (types, subst') <- unifyPairwise trace bind1 bind2 types1 types2 subst
       let fields = List.zip names1 types
       if names1 == names2 then
         return (Record (b1 && b2) fields, subst')
-      else return (Union (Record b1 fields1) (Record b2 fields2), subst)
+      else return (union (Record b1 fields1) (Record b2 fields2), subst)
       where fields1' = List.sortBy (comparing fst) fields1
             fields2' = List.sortBy (comparing fst) fields2
             (names1, types1) = List.unzip fields1'
             (names2, types2) = List.unzip fields2'
     uni trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
-      (tyDom, subst') <- uni trace bind1 bind2 tyDom1 tyDom2 subst 
-      (tyCod, subst'') <- uni trace bind1 bind2 tyCod1 tyCod2 subst' 
+      (tyDom, subst') <- uni trace bind1 bind2 tyDom1 tyDom2 subst
+      (tyCod, subst'') <- uni trace bind1 bind2 tyCod1 tyCod2 subst'
       return (Arrow tyDom tyCod, subst'')
     uni trace bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do
       (t13, subst') <- uni trace bind1 bind2 t1 t3 subst
       (t24, subst'') <- uni trace bind1 bind2 t2 t4 subst'
-      return (Union t13 t24, subst'')
-    uni trace bind1 bind2 (Intersection ts1) (Intersection ts2) subst =
-      return (Intersection $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-    uni trace bind1 bind2 (Intersection ts) t subst =
-      if Set.member t (Set.fromList ts) then
+      return (union t13 t24, subst'')
+    uni trace bind1 bind2 (Intersect t1 t2) (Intersect t3 t4) subst =
+      let intersection = Set.intersection (Set.fromList [t1, t2]) (Set.fromList [t3, t4])
+      in if Set.null intersection then
+           return (union (Intersect t1 t2) (Intersect t3 t4), subst)
+         else return (List.foldl1' Intersect (Set.toList intersection), subst)
+    uni trace bind1 bind2 (Intersect t1 t2) t subst =
+      if Set.member t (Set.fromList [t1, t2]) then
         return (t, subst)
-      else return (Union (Intersection ts) t, subst)
-    uni trace bind1 bind2 t (Intersection ts) subst = uni trace bind1 bind2 (Intersection ts) t subst
+      else return (union (Intersect t1 t2) t, subst)
+    uni trace bind1 bind2 t (Intersect t1 t2) subst = uni trace bind1 bind2 (Intersect t1 t2) t subst
     uni trace bind1 bind2 IntType IntType subst = return (IntType, subst)
     uni trace bind1 bind2 RealType RealType subst = return (RealType, subst)
     uni trace bind1 bind2 StringType StringType subst = return (StringType, subst)
     uni trace bind1 bind2 BoolType BoolType subst = return (BoolType, subst)
-    uni trace bind1 bind2 t1 t2 subst = return (Union t1 t2, subst)
-    
+    uni trace bind1 bind2 t1 t2 subst = return (union t1 t2, subst)
+
     unifyPairwise trace bind1 bind2 types1 types2 subst = do
       let types = List.zip types1 types2
       let f (types, subst) (t1, t2) =
-            do (t, subst') <- uni trace bind1 bind2 t1 t2 subst 
+            do (t, subst') <- uni trace bind1 bind2 t1 t2 subst
                return (t : types, subst')
       (types', subst') <- foldM f ([], subst) types
       return (List.reverse types', subst')
-  
+
   in uni Set.empty Map.empty Map.empty t1 t2 subst
 
 unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> Maybe (Type, Substitution)
@@ -276,13 +279,13 @@ unify' t1 t2 env argOrd subst =
         (Just (t1121, subst1121), _) ->
           case (uni' trace bind1 bind2 t12 t21 subst1121,
                 uni' trace bind1 bind2 t12 t22 subst1121) of
-            (Just (t1221, subst1221), _) -> Just (Union t1121 t1221, subst1221)
-            (_, Just (t1222, subst1222)) -> Just (Union t1121 t1222, subst1222)
+            (Just (t1221, subst1221), _) -> Just (union t1121 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> Just (union t1121 t1222, subst1222)
         (_, Just (t1122, subst1122)) ->
           case (uni' trace bind1 bind2 t12 t21 subst1122,
                 uni' trace bind1 bind2 t12 t22 subst1122) of
-            (Just (t1221, subst1221), _) -> Just (Union t1122 t1221, subst1221)
-            (_, Just (t1222, subst1222)) -> Just (Union t1122 t1222, subst1222)
+            (Just (t1221, subst1221), _) -> Just (union t1122 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> Just (union t1122 t1222, subst1222)
         (_, _) -> Nothing
     uni' trace bind1 bind2 ty (Union t1 t2) subst =
       case uni' trace bind1 bind2 ty t1 subst of
@@ -292,18 +295,20 @@ unify' t1 t2 env argOrd subst =
       case uni' trace bind1 bind2 t1 ty subst of
         Just (t, subst') -> Just (t, subst')
         Nothing -> uni' trace bind1 bind2 t2 ty subst
-    uni' trace bind1 bind2 (Intersection ts1) (Intersection ts2) subst =
-      Just (Intersection $ Set.toList $ Set.intersection (Set.fromList ts1) (Set.fromList ts2), subst)
-    uni' trace bind1 bind2 (Intersection ts) t subst
-      | Set.member t (Set.fromList ts) = Just (t, subst)
+    uni' trace bind1 bind2 (Intersect t1 t2) (Intersect t3 t4) subst =
+      let intersection = Set.intersection (Set.fromList [t1, t2]) (Set.fromList [t3, t4])
+      in if Set.null intersection then Nothing
+         else Just (List.foldl1' Intersect (Set.toList intersection), subst)
+    uni' trace bind1 bind2 (Intersect t1 t2) t subst
+      | Set.member t (Set.fromList [t1, t2]) = Just (t, subst)
       | otherwise = Nothing
-    uni' trace bind1 bind2 t (Intersection ts) subst = uni' trace bind1 bind2 (Intersection ts) t subst
+    uni' trace bind1 bind2 t (Intersect t1 t2) subst = uni' trace bind1 bind2 (Intersect t1 t2) t subst
     uni' trace bind1 bind2 IntType IntType subst = Just (IntType, subst)
     uni' trace bind1 bind2 RealType RealType subst = Just (RealType, subst)
     uni' trace bind1 bind2 StringType StringType subst = Just (StringType, subst)
     uni' trace bind1 bind2 BoolType BoolType subst = Just (BoolType, subst)
     uni' trace _ _ _ _ _ = Nothing
-    
+
     unifyPairwise' trace bind1 bind2 types1 types2 subst =
       if List.length types1 /= List.length types2 then
         Nothing
@@ -313,9 +318,9 @@ unify' t1 t2 env argOrd subst =
                   Just (t, subst') -> (Just (t : types, subst'))
                   Nothing -> Nothing
             f _ Nothing = Nothing
-        
+
   in uni' Set.empty Map.empty Map.empty t1 t2 subst
-        
+
 -------------------------------------------------------
 -- Subtype relation <:
 -------------------------------------------------------
@@ -352,7 +357,7 @@ instansiate name ty t =
       inst (Name s tys) = Name s (List.map inst tys)
       inst (Forall u ty) = Forall u (inst ty)
       inst (Arrow tDom tCod) = Arrow (inst tDom) (inst tCod)
-      inst (Union t1 t2) = Union (inst t1) (inst t2)
+      inst (Union t1 t2) = union (inst t1) (inst t2)
       inst (Tuple tys) = Tuple (List.map inst tys)
       inst (Record b fields) = Record b (List.map (\(s, ty) -> (s, inst ty)) fields)
       inst (Array ty) = Array (inst ty)
@@ -362,7 +367,7 @@ instansiate name ty t =
       inst RealType = RealType
       inst BoolType = BoolType
       inst StringType = StringType
-      inst (Intersection tys) = Intersection (List.map inst tys)
+      inst (Intersect t1 t2) = Intersect (inst t1) (inst t2)
   in inst t
 
 instansiate' :: Type -> Map String Type -> Type
@@ -389,10 +394,10 @@ variance env argOrd t s =
       var trace v (Tuple ts) = lub' (List.map (var trace v) ts)
       var trace v (Record b fields) = lub' (List.map (var trace v . snd) fields)
       var trace v (Array ty) = var trace v ty
-      var trace v (Intersection ts) = lub' (List.map (var trace v) ts)
+      var trace v (Intersect t1 t2) = lub' (List.map (var trace v) [t1, t2])
       var trace v _ = v
   in var Set.empty Bottom t
-  
+
 
 subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> (Bool, Substitution)
 subtype t1 t2 env argOrd subst =
@@ -458,7 +463,7 @@ subtype t1 t2 env argOrd subst =
       let (b1121, subst1121) = sub trace bind1 bind2 assum subst t11 t21
           (b1221, subst1221) = sub trace bind1 bind2 assum subst1121 t12 t21
           (b1222, subst1222) = sub trace bind1 bind2 assum subst1121 t12 t22
-      
+
           (b1122, subst1122) = sub trace bind1 bind2 assum subst t11 t22
           (b1221', subst1221') = sub trace bind1 bind2 assum subst1122 t12 t21
           (b1222', subst1222') = sub trace bind1 bind2 assum subst1122 t12 t22
@@ -492,12 +497,12 @@ subtype t1 t2 env argOrd subst =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
               Nothing -> (b2, subst)
-    sub trace bind1 bind2 assum subst (Intersection tys) ty =
-      List.foldr f (True, subst) tys
+    sub trace bind1 bind2 assum subst (Intersect t1 t2) ty =
+      List.foldr f (True, subst) [t1, t2]
       where f ty' (True, subst) = sub trace bind1 bind2 assum subst ty' ty
             f _ (False, subst) = (False, subst)
-    sub trace bind1 bind2 assum subst ty (Intersection tys) =
-      List.foldr f (True, subst) tys
+    sub trace bind1 bind2 assum subst ty (Intersect t1 t2) =
+      List.foldr f (True, subst) [t1, t2]
       where f ty' (True, subst) = sub trace bind1 bind2 assum subst ty ty'
             f _ (False, subst) = (False, subst)
     sub trace bind1 bind2 _ subst IntType IntType = (True, subst)

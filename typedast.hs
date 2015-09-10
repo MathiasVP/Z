@@ -33,7 +33,7 @@ data TExpr = TIntExpr Int
   deriving (Show)
 
 type TypedExpr = (TExpr, Type)
-  
+
 data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
                 | TListMatchExpr [TypedMatchExpr]
                 | TSetMatchExpr [TypedMatchExpr]
@@ -43,9 +43,9 @@ data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
                 | TStringMatchExpr String
                 | TBoolMatchExpr Bool
   deriving (Show)
-  
+
 type TypedMatchExpr = (TMatchExpr, Type)
-  
+
 data TLValueExpr = TVarExpr String
                  | TFieldAccessExpr TypedLValueExpr String
                  | TArrayAccessExpr TypedLValueExpr TypedExpr

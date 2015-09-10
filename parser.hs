@@ -29,7 +29,7 @@ typeDecl = do
     t <- type_
     spaces
     return (TypeDecl name (fromMaybe [] typevarsM) t)
-    
+
 funDecl :: IParser Decl
 funDecl = withPos $ do
     string "fun"
@@ -50,19 +50,19 @@ funDecl = withPos $ do
     s <- block statement
     spaces
     return $ FunDecl name (fromMaybe [] typevarsM) args typeM (makeCompound s)
-    
+
 decl = funDecl
    <|> typeDecl
-    
+
 -- Types
 type_ :: IParser Type
-type_ = chainl1 arrowType union
+type_ = chainl1 arrowType unionType
 
-union :: IParser (Type -> Type -> Type)
-union = do
+unionType :: IParser (Type -> Type -> Type)
+unionType = do
     char '|'
     spaces
-    return Union
+    return union
 
 keywords = ["type", "fun", "fn", "if", "else",
             "while", "for", "in", "match",
@@ -98,7 +98,7 @@ tupleType = do
     char ')'
     spaces
     return $ Tuple ts
- 
+
 recField :: IParser (String, Type)
 recField = do
     name <- id_
@@ -133,7 +133,7 @@ nameType = do
 
 arrowType :: IParser Type
 arrowType = chainr1 simpleType arrow
-        
+
 arrow :: IParser (Type -> Type -> Type)
 arrow = do
     string "->"
@@ -145,7 +145,7 @@ simpleType = arrayType
          <|> tupleType
          <|> recordType
          <|> nameType
-  
+
 -- Statements
 statement :: IParser Statement
 statement = try ifStatement
@@ -169,7 +169,7 @@ ifStatement = withPos $ do
     s' <- else_
     spaces
     return $ makeIf e s s'
-  where    
+  where
     makeIf e sThen sElseM =
       IfStatement e (makeCompound sThen) (liftM makeCompound sElseM)
 
@@ -188,7 +188,7 @@ ifStatement = withPos $ do
         char ':'
         spaces
         return (Just b)
-        
+
     else_ = do
         -- We use Maybe Bool to determine what kind of situation we're in:
         -- If the correct amount of indentation is present, followed by 'else',
@@ -240,7 +240,7 @@ forStatement = withPos $ do
             char ':'
             spaces
             return (me, e)
-            
+
 assignStatement = try assignMatchExpr
               <|> assignLValueExpr
   where assignMatchExpr = do
@@ -261,7 +261,7 @@ assignStatement = try assignMatchExpr
             e <- expr
             spaces
             return $ AssignStatement (Right lve) e
-            
+
 matchStatement = withPos $ do
     string "match"
     spaces'
@@ -282,28 +282,28 @@ matchStatement = withPos $ do
             s <- block statement
             spaces
             return (me, makeCompound s)
-          
+
 returnStatement = do
     string "return"
     spaces'
     e <- expr
     spaces
     return $ ReturnStatement e
-    
+
 breakStatement = do
     string "break"
     spaces
     return BreakStatement
-    
+
 continueStatement = do
     string "continue"
     spaces
     return ContinueStatement
-         
+
 declStatement = do
     d <- decl
     return $ DeclStatement d
-  
+
 -- Expressions
 expr = orExpr
 
@@ -343,7 +343,7 @@ op s f = do
     string s
     spaces'
     return f
-        
+
 multExpr :: IParser Expr
 multExpr = chainl1 unaryExpr timesdiv
 
@@ -351,21 +351,21 @@ unaryExpr :: IParser Expr
 unaryExpr = bangExpr
       <|> unaryPlusExpr
       <|> unaryMinusExpr
-      
+
 unaryPlusExpr :: IParser Expr
 unaryPlusExpr = do
     char '+'
     spaces'
     e <- unaryExpr
     return e
-    
+
 unaryMinusExpr :: IParser Expr
 unaryMinusExpr = do
     char '-'
     spaces'
     e <- unaryExpr
     return $ UnaryMinusExpr e
-      
+
 bangExpr :: IParser Expr
 bangExpr = parseBangExpr
        <|> callExpr
@@ -375,7 +375,7 @@ bangExpr = parseBangExpr
       spaces'
       e <- unaryExpr
       return $ BangExpr e
-      
+
 callExpr :: IParser Expr
 callExpr = chainl1 primaryExpr (return CallExpr)
 
@@ -393,7 +393,7 @@ primaryExpr = do
                <|> recordExpr
                <|> try lambdaExpr
                <|> try ((return LValue) <*> lvalueExpr)
-               
+
 maybeType = optionMaybe $ try $ do
                 char ':'
                 spaces'
@@ -406,7 +406,7 @@ literalExpr = try ((return RealExpr) <*> real)
           <|> (return IntExpr) <*> integer
           <|> (return BoolExpr) <*> bool
           <|> (return StringExpr) <*> string_
-     
+
 integer :: IParser Int
 integer = do
     n <- read <$> number
@@ -450,7 +450,7 @@ listExpr = do
     char ']'
     spaces'
     return $ ListExpr exprs
-    
+
 tupleExpr :: IParser Expr
 tupleExpr = do
     char '('
@@ -458,7 +458,7 @@ tupleExpr = do
     char ')'
     spaces'
     return $ TupleExpr exprs
-    
+
 recordExpr :: IParser Expr
 recordExpr = do
   char '{'
@@ -475,7 +475,7 @@ recordExpr = do
         spaces'
         e <- expr
         return (name, e)
-    
+
 lvalueExpr :: IParser LValueExpr
 lvalueExpr = do
     name <- id_
@@ -488,7 +488,7 @@ lvalueExpr = do
             name <- id_
             spaces'
             return (\x -> FieldAccessExpr x name)
-            
+
         brackets = do
             char '['
             spaces'
@@ -497,7 +497,7 @@ lvalueExpr = do
             char ']'
             spaces'
             return (\x -> ArrayAccessExpr x e)
-            
+
 lambdaExpr :: IParser Expr
 lambdaExpr = do
     string "fn"
@@ -509,7 +509,7 @@ lambdaExpr = do
     sameOrIndented
     s <- block statement
     return $ LambdaExpr args (makeCompound s)
-      
+
 matchExpr :: IParser MatchExpr
 matchExpr = do
     e <- matchExpr'
@@ -536,7 +536,7 @@ parenthesisMatchExpr = do
     char ')'
     spaces'
     return e
-        
+
 tupleMatchExpr :: IParser MatchExpr
 tupleMatchExpr = do
     char '('
@@ -552,7 +552,7 @@ listMatchExpr = do
     char ']'
     spaces'
     return $ ListMatchExpr exprs
-    
+
 recordMatchExpr :: IParser MatchExpr
 recordMatchExpr = matchRecordExpr
   where
@@ -575,19 +575,19 @@ varMatchExpr = do
     name <- id_
     spaces'
     return $ VarMatch name
-    
+
 intMatchExpr :: IParser MatchExpr
 intMatchExpr = do
     n <- integer
     spaces'
     return $ IntMatchExpr n
-    
+
 stringMatchExpr :: IParser MatchExpr
 stringMatchExpr = do
     s <- string_
     spaces'
     return $ StringMatchExpr s
-    
+
 boolMatchExpr :: IParser MatchExpr
 boolMatchExpr = do
     b <- bool
