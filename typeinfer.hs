@@ -102,21 +102,21 @@ infer decls = do
       (args', env', argOrd', subst') <- inferList (inferMatchExpr Nothing) env argOrd subst args
       retTy' <- Maybe.fromMaybe mkTypeVar (liftM return retTy)
       let types = List.map snd args'
-      let functionTy = List.foldr (makeForall subst') (makeArrow types retTy') types
-      let env'' = Map.insert name functionTy env'
+          functionTy = List.foldr (makeForall subst') (makeArrow types retTy') types
+          env'' = Map.insert name functionTy env'
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
-      let functionTy' = List.foldr (makeForall subst''') (makeArrow types retTy') types
-      let globEnv = Map.insert name functionTy' env
       case subtype infRetTy retTy' env'' argOrd'' subst''' of
-        (True, subst) ->
+        (True, subst) -> do
+          let functionTy' = List.foldr (makeForall subst) (makeArrow types retTy') types
+              globEnv = Map.insert name functionTy' env
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
         (False, _) -> do
+          let globEnv = Map.insert name Error env
           putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
                      "' with actual type '" ++ show infRetTy ++ "'."
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
 
-    -- TODO: Test this
     inferMatchExpr tm (TupleMatchExpr mes) env argOrd subst = do
       let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
       (mes', env', argOrd', subst') <- do
@@ -265,9 +265,8 @@ infer decls = do
     inferStatement (MatchStatement e mes) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst
       t <- mkTypeVar
-      (_, subst') <- unify t (typeOf e') envExpr argOrd' substExpr
+      (_, subst') <- unify (typeOf e') t envExpr argOrd' substExpr
       (mes', _, _, subst'') <- inferList (f t) envExpr argOrd' subst' mes
-      print (follow subst'' t)
       return (TMatchStatement e' mes', env, argOrd, subst'')
       where f (TypeVar u) (me, s) env argOrd subst = do
               (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst
