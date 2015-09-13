@@ -9,6 +9,8 @@ import Data.Set (Set)
 import Data.Map (Map)
 import TypedAst
 import Unification
+import Subtype
+import TypeUtils
 
 makeArrow :: [Type] -> Type -> Type
 makeArrow types retTy = List.foldr Arrow retTy types
