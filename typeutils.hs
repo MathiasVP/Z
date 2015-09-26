@@ -16,7 +16,7 @@ generalize :: U.Unique -> Substitution -> Substitution
 generalize u subst =
   case Map.lookup u subst of
     Just (TypeVar u') -> generalize u' (Map.delete u subst)
-    Just ty -> Map.delete u subst
+    Just _ -> Map.delete u subst
     Nothing -> subst
     
 follow :: Substitution -> Type -> Type
@@ -44,13 +44,13 @@ follow subst = fol
     fol (Forall u ty) = Forall u (fol ty)
     fol Error = Error
     fol (Intersect t1 t2) = Intersect (fol t1) (fol t2)
-    
+
 makeBindings :: ArgOrd -> String -> [Type] -> Bindings
 makeBindings argOrd s types =
   case Map.lookup s argOrd of
     Just argOrd -> Map.fromList $ List.zip (Map.elems argOrd) types
     Nothing -> Map.empty
-    
+
 instansiate :: String -> Type -> Type -> Type
 instansiate name ty t =
   let inst (Name s [])
@@ -69,7 +69,7 @@ instansiate name ty t =
       inst RealType = RealType
       inst BoolType = BoolType
       inst StringType = StringType
-      inst (Intersect t1 t2) = Intersect (inst t1) (inst t2)
+      inst (Intersect t1 t2) = intersect (inst t1) (inst t2)
   in inst t
 
 instansiate' :: Type -> Map String Type -> Type

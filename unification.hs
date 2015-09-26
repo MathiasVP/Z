@@ -135,34 +135,37 @@ unify t1 t2 env argOrd subst =
 
   in uni Set.empty Map.empty Map.empty t1 t2 subst
 
-unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> Maybe (Type, Substitution)
+unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Maybe (Type, Substitution))
 unify' t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
     uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
-        (TypeVar u, TypeVar u') -> Just (TypeVar u, Map.insert u (TypeVar u') subst)
-        (TypeVar u, t) -> Just (t, Map.insert u t subst)
-        (t, TypeVar u') -> Just (t, Map.insert u' t subst)
+        (TypeVar u, TypeVar u') -> return $ Just (TypeVar u, Map.insert u (TypeVar u') subst)
+        (TypeVar u, t) -> return $ Just (t, Map.insert u t subst)
+        (t, TypeVar u') -> return $ Just (t, Map.insert u' t subst)
         (t, t') -> uni' trace bind1 bind2 t t' subst
-    uni' trace bind1 bind2 (Forall u t1) t2 subst =
-      case uni' trace bind1 bind2 t1 t2 subst of
-        Just (ty, subst') -> Just (ty, generalize u subst')
-        Nothing -> Nothing
+    uni' trace bind1 bind2 (Forall u t1) t2 subst = do
+      res <- uni' trace bind1 bind2 t1 t2 subst
+      case res of
+        Just (ty, subst') -> return $ Just (ty, generalize u subst')
+        Nothing -> return Nothing
     uni' trace bind1 bind2 t1 (Forall u t2) subst =
       uni' trace bind1 bind2 (Forall u t2) t1 subst
     uni' trace bind1 bind2 (TypeVar u) t subst =
       case follow subst (TypeVar u) of
-        TypeVar u -> Just (t, Map.insert u t subst)
-        t'        -> case uni' trace bind1 bind2 t' t subst of
-                      Just (t'', subst') -> Just (t'', Map.insert u t'' subst')
-                      Nothing            -> Nothing
+        TypeVar u -> return $ Just (t, Map.insert u t subst)
+        t'        -> do
+          res <- uni' trace bind1 bind2 t' t subst
+          case res of
+            Just (t'', subst') -> return $ Just (t'', Map.insert u t'' subst')
+            Nothing            -> return Nothing
     uni' trace bind1 bind2 t (TypeVar u) subst =
       uni' trace bind1 bind2 (TypeVar u) t subst
     uni' trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
       | Set.member s1 trace && Set.member s2 trace =
-        Nothing
+        return Nothing
       | Set.member s1 trace =
         uni' (Set.insert s2 trace) bind1 bind2' t1 t2' subst
       | Set.member s2 trace =
@@ -175,89 +178,101 @@ unify' t1 t2 env argOrd subst =
             bind2' = makeBindings argOrd s2 types2
     uni' trace bind1 bind2 (Name s types) t2 subst
       | Set.member s trace =
-        Nothing
+        return Nothing
       | otherwise =
         uni' (Set.insert s trace) bind bind2 t t2 subst
       where t = lookup bind1 env s
             bind = makeBindings argOrd s types
     uni' trace bind1 bind2 t1 (Name s types) subst =
       uni' trace bind1 bind2 (Name s types) t1 subst
-    uni' trace bind1 bind2 (Array t1) (Array t2) subst =
-      case uni' trace bind1 bind2 t1 t2 subst of
-        Just (t, subst') -> Just (Array t, subst')
-        Nothing -> Nothing
+    uni' trace bind1 bind2 (Array t1) (Array t2) subst = do
+      res <- uni' trace bind1 bind2 t1 t2 subst
+      case res of
+        Just (t, subst') -> return $ Just (Array t, subst')
+        Nothing -> return Nothing
     uni' trace bind1 bind2 (Tuple [t1]) (Tuple [t2]) subst =
       uni' trace bind1 bind2 t1 t2 subst
     uni' trace bind1 bind2 (Tuple [t1]) t2 subst =
       uni' trace bind1 bind2 t1 t2 subst
     uni' trace bind1 bind2 t1 (Tuple [t2]) subst =
       uni' trace bind1 bind2 t1 t2 subst
-    uni' trace bind1 bind2 (Tuple types1) (Tuple types2) subst =
-      case unifyPairwise' trace bind1 bind2 types1 types2 subst of
-        Just (types, subst') -> Just (Tuple types, subst')
-        Nothing -> Nothing
+    uni' trace bind1 bind2 (Tuple types1) (Tuple types2) subst = do
+      res <- unifyPairwise' trace bind1 bind2 types1 types2 subst
+      case res of
+        Just (types, subst') -> return $ Just (Tuple types, subst')
+        Nothing -> return Nothing
     uni' trace bind1 bind2 (Record b1 fields1) (Record b2 fields2) subst
-      | names1 == names2 =
-        case unifyPairwise' trace bind1 bind2 types1 types2 subst of
+      | names1 == names2 = do
+        res <- unifyPairwise' trace bind1 bind2 types1 types2 subst
+        case res of
           Just (types, subst') ->
             let fields = List.zip names1 types
-            in Just (Record (b1 && b2) fields, subst')
-          Nothing -> Nothing
-      | otherwise = Nothing
+            in return $ Just (Record (b1 && b2) fields, subst')
+          Nothing -> return Nothing
+      | otherwise = return Nothing
       where fields1' = List.sortBy (comparing fst) fields1
             fields2' = List.sortBy (comparing fst) fields2
             (names1, types1) = List.unzip fields1'
             (names2, types2) = List.unzip fields2'
-    uni' trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst =
-      case uni' trace bind1 bind2 tyDom2 tyDom1 subst of
-        Just (tyDom, subst') ->
-          case uni' trace bind1 bind2 tyCod1 tyCod2 subst' of
-            Just (tyCod, subst'') -> Just (Arrow tyDom tyCod, subst'')
-            Nothing -> Nothing
-        Nothing -> Nothing
-    uni' trace bind1 bind2 (Union t11 t12) (Union t21 t22) subst =
-      case (uni' trace bind1 bind2 t11 t21 subst,
-            uni' trace bind1 bind2 t11 t22 subst) of
-        (Just (t1121, subst1121), _) ->
-          case (uni' trace bind1 bind2 t12 t21 subst1121,
-                uni' trace bind1 bind2 t12 t22 subst1121) of
-            (Just (t1221, subst1221), _) -> Just (union t1121 t1221, subst1221)
-            (_, Just (t1222, subst1222)) -> Just (union t1121 t1222, subst1222)
-        (_, Just (t1122, subst1122)) ->
-          case (uni' trace bind1 bind2 t12 t21 subst1122,
-                uni' trace bind1 bind2 t12 t22 subst1122) of
-            (Just (t1221, subst1221), _) -> Just (union t1122 t1221, subst1221)
-            (_, Just (t1222, subst1222)) -> Just (union t1122 t1222, subst1222)
-        (_, _) -> Nothing
-    uni' trace bind1 bind2 ty (Union t1 t2) subst =
-      case uni' trace bind1 bind2 ty t1 subst of
-        Just (t, subst') -> Just (t, subst')
+    uni' trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
+      resDom <- uni' trace bind1 bind2 tyDom2 tyDom1 subst
+      case resDom of
+        Just (tyDom, subst') -> do
+          resCod <- uni' trace bind1 bind2 tyCod1 tyCod2 subst'
+          case resCod of
+            Just (tyCod, subst'') -> return $ Just (Arrow tyDom tyCod, subst'')
+            Nothing -> return Nothing
+        Nothing -> return Nothing
+    uni' trace bind1 bind2 (Union t11 t12) (Union t21 t22) subst = do
+      res1121 <- uni' trace bind1 bind2 t11 t21 subst
+      res1122 <- uni' trace bind1 bind2 t11 t22 subst
+      case (res1121, res1122) of
+        (Just (t1121, subst1121), _) -> do
+          res1221 <- uni' trace bind1 bind2 t12 t21 subst1121
+          res1222 <- uni' trace bind1 bind2 t12 t22 subst1121
+          case (res1221, res1222) of
+            (Just (t1221, subst1221), _) -> return $ Just (union t1121 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> return $ Just (union t1121 t1222, subst1222)
+        (_, Just (t1122, subst1122)) -> do
+          res1221 <- uni' trace bind1 bind2 t12 t21 subst1122
+          res1222 <- uni' trace bind1 bind2 t12 t22 subst1122
+          case (res1221, res1222) of
+            (Just (t1221, subst1221), _) -> return $ Just (union t1122 t1221, subst1221)
+            (_, Just (t1222, subst1222)) -> return $ Just (union t1122 t1222, subst1222)
+        (_, _) -> return Nothing
+    uni' trace bind1 bind2 ty (Union t1 t2) subst = do
+      res <- uni' trace bind1 bind2 ty t1 subst
+      case res of
+        Just (t, subst') -> return $ Just (t, subst')
         Nothing -> uni' trace bind1 bind2 ty t2 subst
     uni' trace bind1 bind2 (Union t1 t2) ty subst =
       uni' trace bind1 bind2 ty (Union t1 t2) subst
+    -- TODO: This shouldn't intersect using equality. Use unification instead
     uni' trace bind1 bind2 (Intersect t1 t2) (Intersect t3 t4) subst =
       let intersection = Set.intersection (Set.fromList [t1, t2]) (Set.fromList [t3, t4])
-      in if Set.null intersection then Nothing
-         else Just (List.foldl1' Intersect (Set.toList intersection), subst)
+      in if Set.null intersection then return Nothing
+         else return $ Just (List.foldl1' Intersect (Set.toList intersection), subst)
     uni' trace bind1 bind2 (Intersect t1 t2) t subst
-      | Set.member t (Set.fromList [t1, t2]) = Just (t, subst)
-      | otherwise = Nothing
+      | Set.member t (Set.fromList [t1, t2]) = return $ Just (t, subst)
+      | otherwise = return Nothing
     uni' trace bind1 bind2 t (Intersect t1 t2) subst =
       uni' trace bind1 bind2 (Intersect t1 t2) t subst
-    uni' trace bind1 bind2 IntType IntType subst = Just (IntType, subst)
-    uni' trace bind1 bind2 RealType RealType subst = Just (RealType, subst)
-    uni' trace bind1 bind2 StringType StringType subst = Just (StringType, subst)
-    uni' trace bind1 bind2 BoolType BoolType subst = Just (BoolType, subst)
-    uni' trace _ _ _ _ _ = Nothing
+    uni' trace bind1 bind2 IntType IntType subst = return $ Just (IntType, subst)
+    uni' trace bind1 bind2 RealType RealType subst = return $ Just (RealType, subst)
+    uni' trace bind1 bind2 StringType StringType subst = return $ Just (StringType, subst)
+    uni' trace bind1 bind2 BoolType BoolType subst = return $ Just (BoolType, subst)
+    uni' trace _ _ _ _ _ = return Nothing
 
     unifyPairwise' trace bind1 bind2 types1 types2 subst =
       if List.length types1 /= List.length types2 then
-        Nothing
-      else List.foldr f (Just ([], subst)) (List.zip types1 types2)
-      where f (t1, t2) (Just (types, subst)) =
-                case uni' trace bind1 bind2 t1 t2 subst of
-                  Just (t, subst') -> (Just (t : types, subst'))
-                  Nothing -> Nothing
-            f _ Nothing = Nothing
+        return Nothing
+        -- TODO: Use foldrM instead
+      else foldM f (Just ([], subst)) (List.zip types1 types2)
+      where f (Just (types, subst)) (t1, t2) =
+              do res <- uni' trace bind1 bind2 t1 t2 subst
+                 case res of
+                   Just (t, subst') -> return $ Just (t : types, subst')
+                   Nothing -> return Nothing
+            f Nothing _ = return Nothing
 
   in uni' Set.empty Map.empty Map.empty t1 t2 subst

@@ -8,4 +8,6 @@ main = let path = "../test.z"
                Left err -> print err
                Right ast -> do
                  (typed, env, subst) <- T.infer ast
-                 return ()
+                 print env
+                 putStrLn ""
+                 print subst

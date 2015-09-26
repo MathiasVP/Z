@@ -1,4 +1,5 @@
 module Subtype (subtype) where
+import Control.Monad
 import Data.Map (Map)
 import Data.Map ((!))
 import qualified Data.Map as Map
@@ -56,117 +57,118 @@ variance env argOrd t s =
       var trace v _ = v
   in var Set.empty Bottom t
 
-
-subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> (Bool, Substitution)
+subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Bool, Substitution)
 subtype t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
-    sub trace bind1 bind2 assum subst (Forall u t1) t2 =
-      case sub trace bind1 bind2 assum subst t1 t2 of
-        (True, subst') -> (True, generalize u subst')
-        (False, subst') -> (False, subst')
-    sub trace bind1 bind2 assum subst t1 (Forall u t2) =
-      case sub trace bind1 bind2 assum subst t1 t2 of
-        (True, subst') -> (True, generalize u subst')
-        (False, subst') -> (False, subst')
+    sub trace bind1 bind2 assum subst (Forall u t1) t2 = do
+      (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
+      case b of
+        True -> return (True, generalize u subst')
+        False -> return (False, subst')
+    sub trace bind1 bind2 assum subst t1 (Forall u t2) = do
+      (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
+      case b of
+        True -> return (True, generalize u subst')
+        False -> return (False, subst')
     sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of
-        TypeVar u -> (True, Map.insert u t1 subst)
+        TypeVar u -> return (True, Map.insert u t1 subst)
         ty -> sub trace bind1 bind2 assum subst t1 ty
     sub trace bind1 bind2 assum subst t1@(TypeVar u) t2 =
       case follow subst t1 of
-        TypeVar u -> (True, Map.insert u t2 subst)
+        TypeVar u -> return (True, Map.insert u t2 subst)
         ty -> sub trace bind1 bind2 assum subst ty t2
     sub trace bind1 bind2 assum subst (Name s1 tys1) (Name s2 tys2) =
       case Map.lookup (s1, s2) assum of
-        Just (tys1', tys2') ->
+        Just (tys1', tys2') -> do
           let ty1 = lookup bind1 env s1
               ty2 = lookup bind2 env s2
               vars1 = List.map (variance env argOrd ty1) (Map.keys bind1)
               vars2 = List.map (variance env argOrd ty2) (Map.keys bind2)
-              (b1, subst') = List.foldr f (True, subst) (List.zip3 tys1 tys1' vars1)
-          in List.foldr f (b1, subst') (List.zip3 tys1 tys1' vars1)
+          (b1, subst') <- foldM f (True, subst) (List.zip3 tys1 tys1' vars1)
+          foldM f (b1, subst') (List.zip3 tys1 tys1' vars1)
         Nothing
           | s1 == s2 && Map.notMember s1 bind1 && Map.notMember s2 bind2 ->
             let ty = env ! s1
                 vars = List.map (variance env argOrd ty) (Map.keys bind1)
-            in List.foldr f (True, subst) (List.zip3 tys1 tys2 vars)
+            in foldM f (True, subst) (List.zip3 tys1 tys2 vars)
           | otherwise ->
             let t1 = lookup bind1 env s1
                 t2 = lookup bind2 env s2
                 assum' = Map.insert (s1, s2) (tys1, tys2) assum
             in sub trace bind1 bind2 assum' subst t1 t2
-       where f (t1, t2, Top) (True, subst) =
-               let (b1, subst') = sub trace bind1 bind2 assum subst t1 t2
-                   (b2, subst'') = sub trace bind1 bind2 assum subst' t2 t1
-               in (b1 && b2, subst'')
-             f (t1, t2, Positive) (True, subst) = sub trace bind1 bind2 assum subst t1 t2
-             f (t1, t2, Negative) (True, subst) = sub trace bind1 bind2 assum subst t2 t1
-             f (t1, t2, Bottom) (True, subst) = (True, subst)
-             f _ (False, subst) = (False, subst)
+       where f (True, subst) (t1, t2, Top) = do
+               (b1, subst') <- sub trace bind1 bind2 assum subst t1 t2
+               (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 t1
+               return (b1 && b2, subst'')
+             f (True, subst) (t1, t2, Positive) = sub trace bind1 bind2 assum subst t1 t2
+             f (True, subst) (t1, t2, Negative) = sub trace bind1 bind2 assum subst t2 t1
+             f (True, subst) (t1, t2, Bottom) = return (True, subst)
+             f (False, subst) _ = return (False, subst)
     sub trace bind1 bind2 assum subst (Name s tys) ty
-      | Set.member s trace =
-        (False, subst)
+      | Set.member s trace = return (False, subst)
       | otherwise =
         sub (Set.insert s trace) bind1' bind2 assum subst (lookup bind1 env s) ty
       where bind1' = makeBindings argOrd s tys
     sub trace bind1 bind2 assum subst ty (Name s tys)
-      | Set.member s trace =
-        (False, subst)
+      | Set.member s trace = return (False, subst)
       | otherwise =
         sub (Set.insert s trace) bind1 bind2' assum subst ty (lookup bind2 env s)
       where bind2' = makeBindings argOrd s tys
-    sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) =
-      let (b1121, subst1121) = sub trace bind1 bind2 assum subst t11 t21
-          (b1221, subst1221) = sub trace bind1 bind2 assum subst1121 t12 t21
-          (b1222, subst1222) = sub trace bind1 bind2 assum subst1121 t12 t22
+    sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) = do
+      (b1121, subst1121) <- sub trace bind1 bind2 assum subst t11 t21
+      (b1221, subst1221) <- sub trace bind1 bind2 assum subst1121 t12 t21
+      (b1222, subst1222) <- sub trace bind1 bind2 assum subst1121 t12 t22
 
-          (b1122, subst1122) = sub trace bind1 bind2 assum subst t11 t22
-          (b1221', subst1221') = sub trace bind1 bind2 assum subst1122 t12 t21
-          (b1222', subst1222') = sub trace bind1 bind2 assum subst1122 t12 t22
-      in if b1121 && b1221 then (True, subst1221)
-         else if b1121 && b1222 then (True, subst1222)
-         else if b1122 && b1221' then (True, subst1221')
-         else if b1122 && b1222' then (True, subst1222')
-         else (False, subst)
-    sub trace bind1 bind2 assum subst (Union t1 t2) ty =
-      let (b1, subst') = sub trace bind1 bind2 assum subst t1 ty
-          (b2, subst'') = sub trace bind1 bind2 assum subst' t2 ty
-      in (b1 && b2, subst'')
-    sub trace bind1 bind2 assum subst ty (Union t1 t2) =
-      let (b1, subst') = sub trace bind1 bind2 assum subst ty t1
-          (b2, subst'') = sub trace bind1 bind2 assum subst' ty t2
-      in (b1 || b2, subst'')
-    sub trace bind1 bind2 assum subst (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) =
-      let (b1, subst') = sub trace bind1 bind2 assum subst tDom2 tDom1
-          (b2, subst'') = sub trace bind1 bind2 assum subst' tCod1 tCod2
-      in (b1 && b2, subst'')
+      (b1122, subst1122) <- sub trace bind1 bind2 assum subst t11 t22
+      (b1221', subst1221') <- sub trace bind1 bind2 assum subst1122 t12 t21
+      (b1222', subst1222') <- sub trace bind1 bind2 assum subst1122 t12 t22
+      if b1121 && b1221 then return (True, subst1221)
+      else if b1121 && b1222 then return (True, subst1222)
+      else if b1122 && b1221' then return (True, subst1221')
+      else if b1122 && b1222' then return (True, subst1222')
+      else return (False, subst)
+    sub trace bind1 bind2 assum subst (Union t1 t2) ty = do
+      (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty
+      return (b1 && b2, subst'')
+    sub trace bind1 bind2 assum subst ty (Union t1 t2) = do
+      (b1, subst') <- sub trace bind1 bind2 assum subst ty t1
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
+      return (b1 || b2, subst'')
+    sub trace bind1 bind2 assum subst (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) = do
+      (b1, subst') <- sub trace bind1 bind2 assum subst tDom2 tDom1
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod1 tCod2
+      return (b1 && b2, subst'')
     sub trace bind1 bind2 assum subst (Tuple tys1) (Tuple tys2) =
       if List.length tys1 >= List.length tys2 then
-        List.foldr f (True, subst) (List.zip tys1 tys2)
-      else (False, subst)
-      where f (t1, t2) (True, subst) = sub trace bind1 bind2 assum subst t1 t2
-            f _ (False, subst) = (False, subst)
-    sub trace bind1 bind2 assum subst (Array t1) (Array t2) = sub trace bind1 bind2 assum subst t1 t2
+        foldM f (True, subst) (List.zip tys1 tys2)
+      else return (False, subst)
+      where f (True, subst) (t1, t2) = sub trace bind1 bind2 assum subst t1 t2
+            f (False, subst) _ = return (False, subst)
+    sub trace bind1 bind2 assum subst (Array t1) (Array t2) =
+      sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst (Record _ fields1) (Record b2 fields2) =
-      List.foldr f (True, subst) fields1
-      where f (name, ty) (b, subst) =
+      foldM f (True, subst) fields1
+      where f :: (Bool, Substitution) -> (String, Type) -> IO (Bool, Substitution)
+            f (b, subst) (name, ty) =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
-              Nothing -> (b2, subst)
+              Nothing -> return (b2, subst)
     sub trace bind1 bind2 assum subst (Intersect t1 t2) ty =
-      List.foldr f (True, subst) [t1, t2]
-      where f ty' (True, subst) = sub trace bind1 bind2 assum subst ty' ty
-            f _ (False, subst) = (False, subst)
+      foldM f (True, subst) [t1, t2]
+      where f (True, subst) ty' = sub trace bind1 bind2 assum subst ty' ty
+            f (False, subst) _ = return (False, subst)
     sub trace bind1 bind2 assum subst ty (Intersect t1 t2) =
-      List.foldr f (True, subst) [t1, t2]
-      where f ty' (True, subst) = sub trace bind1 bind2 assum subst ty ty'
-            f _ (False, subst) = (False, subst)
-    sub trace bind1 bind2 _ subst IntType IntType = (True, subst)
-    sub trace bind1 bind2 _ subst IntType RealType = (True, subst)
-    sub trace bind1 bind2 _ subst RealType RealType = (True, subst)
-    sub trace bind1 bind2 _ subst BoolType BoolType = (True, subst)
-    sub trace bind1 bind2 _ subst StringType StringType = (True, subst)
-    sub trace bind1 bind2 _ _ _ _ = (False, subst)
+      foldM f (True, subst) [t1, t2]
+      where f (True, subst) ty' = sub trace bind1 bind2 assum subst ty ty'
+            f (False, subst) _ = return (False, subst)
+    sub trace bind1 bind2 _ subst IntType IntType = return (True, subst)
+    sub trace bind1 bind2 _ subst IntType RealType = return (True, subst)
+    sub trace bind1 bind2 _ subst RealType RealType = return (True, subst)
+    sub trace bind1 bind2 _ subst BoolType BoolType = return (True, subst)
+    sub trace bind1 bind2 _ subst StringType StringType = return (True, subst)
+    sub trace bind1 bind2 _ _ _ _ = return (False, subst)
   in sub Set.empty Map.empty Map.empty Map.empty subst t1 t2

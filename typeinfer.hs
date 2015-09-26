@@ -108,25 +108,35 @@ infer decls = do
           env'' = Map.insert name functionTy env'
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
-      case subtype infRetTy retTy' env'' argOrd'' subst''' of
-        (True, subst) -> do
-          let functionTy' = List.foldr (makeForall subst) (makeArrow types retTy') types
+      (b, subst'''') <- subtype infRetTy retTy' env'' argOrd'' subst'''
+      case b of
+        True -> do
+          let functionTy' = List.foldr (makeForall subst'''') (makeArrow types retTy') types
               globEnv = Map.insert name functionTy' env
-          return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
-        (False, _) -> do
+          return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst'''')
+        False -> do
           let globEnv = Map.insert name Error env
           putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
                      "' with actual type '" ++ show infRetTy ++ "'."
           return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst)
 
+    commMaybeIO :: Maybe (IO (Maybe t)) -> IO (Maybe (Maybe t))
+    commMaybeIO Nothing = return Nothing
+    commMaybeIO (Just iom) = iom >>= return . Just
+          
+    inferMatchExpr :: Maybe Type -> MatchExpr -> Env -> ArgOrd -> Substitution ->
+                      IO (TypedMatchExpr, Env, ArgOrd, Substitution)
     inferMatchExpr tm (TupleMatchExpr mes) env argOrd subst = do
       let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
       (mes', env', argOrd', subst') <- do
         types <- replicateM (List.length mes) mkTypeVar
-        case liftM (uni' env argOrd subst (Tuple types)) tm of
+        -- liftM (uni' env argOrd subst (Tuple types)) tm ::
+        --   Maybe (IO (Maybe (Type, Substitution)))
+        res <- commMaybeIO $ liftM (uni' env argOrd subst (Tuple types)) tm
+        case res of
           Just (Just (Tuple ts, subst')) ->
             inferList (\(me, t) -> inferMatchExpr (Just t) me) env argOrd subst'
-                                        (List.zip mes ts)
+                                     (List.zip mes ts)
           Just Nothing -> do
             putStrLn $ "Match error: Couldn't unify expression '" ++
                          show (TupleMatchExpr mes) ++ "' with type '" ++
@@ -139,8 +149,9 @@ infer decls = do
     inferMatchExpr tm (ListMatchExpr mes) env argOrd subst = do
       let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
       t <- mkTypeVar
-      (mes', env', argOrd', subst') <-
-        case liftM (uni' env argOrd subst (Array t)) tm of
+      (mes', env', argOrd', subst') <- do
+        res <- commMaybeIO $ liftM (uni' env argOrd subst (Array t)) tm
+        case res of
           Just (Just (Array t, subst')) -> inferList (inferMatchExpr (Just t))
                                              env argOrd subst' mes
           Just Nothing -> do
@@ -158,7 +169,8 @@ infer decls = do
         fields' <- forever mkTypeVar >>=
                      return . List.zip (normaliseFields fields)
         let record = Record False (List.map (\((s, _), ty) -> (s, ty)) fields')
-        case liftM (uni' env argOrd subst record) tm of
+        res <- commMaybeIO $ liftM (uni' env argOrd subst record) tm
+        case res of
           Just (Just (Record _ fields', subst')) ->
             inferList (\(entry, ty) -> f (Just ty) entry) env argOrd
               subst' (List.zip (normaliseFields fields) typesm)
@@ -184,7 +196,8 @@ infer decls = do
 
     inferMatchExpr tm (TypedMatchExpr me ty) env argOrd subst = do
       (me', env', argOrd', subst') <- inferMatchExpr tm me env argOrd subst
-      case unify' ty (typeOf me') env' argOrd' subst' of
+      res <- unify' ty (typeOf me') env' argOrd' subst'
+      case res of
         Just (ty'', subst'') -> return (me', env', argOrd', subst'')
         Nothing -> do
           putStrLn $ "Error: Couldn't match expected type '" ++ show ty ++
@@ -234,8 +247,9 @@ infer decls = do
     inferStatement (ForStatement me e s) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst
       t <- mkTypeVar
-      (t', subst') <-
-        case unify' (typeOf e') (Array t) envExpr argOrd' substExpr of
+      (t', subst') <- do
+        res <- unify' (typeOf e') (Array t) envExpr argOrd' substExpr
+        case res of
           Just (_, subst') -> return (t, subst')
           Nothing -> do
             putStrLn $ "Error: Cannot iterate over expression of type '" ++
@@ -299,11 +313,14 @@ infer decls = do
 
     mkMathOpType e1 e2 env argOrd subst = do
       (expectedType, subst') <- makeIntersect env argOrd subst IntType RealType
-      case unify' (typeOf e1) expectedType env argOrd subst' of
-        Just (t1, subst1) ->
-          case unify' (typeOf e2) expectedType env argOrd subst1 of
-            Just (t2, subst2) ->
-              case unify' t1 t2 env argOrd subst2 of
+      res1 <- unify' (typeOf e1) expectedType env argOrd subst'
+      case res1 of
+        Just (t1, subst1) -> do
+          res2 <- unify' (typeOf e2) expectedType env argOrd subst1
+          case res2 of
+            Just (t2, subst2) -> do
+              res12 <- unify' t1 t2 env argOrd subst2
+              case res12 of
                 Just (t, subst') -> return (t, subst')
                 Nothing -> do
                   putStrLn $ "Cannot unify type '" ++ show t1 ++
@@ -318,12 +335,15 @@ infer decls = do
                      "' with type '" ++ show expectedType ++ "'."
           return (Error, subst)
 
-    mkLogicalOpType e1 e2 env argOrd subst =
-      case unify' (typeOf e1) BoolType env argOrd subst of
-        Just (t1, subst1) ->
-          case unify' (typeOf e2) BoolType env argOrd subst1 of
-            Just (t2, subst2) ->
-              case unify' t1 t2 env argOrd subst2 of
+    mkLogicalOpType e1 e2 env argOrd subst = do
+      res1 <- unify' (typeOf e1) BoolType env argOrd subst
+      case res1 of
+        Just (t1, subst1) -> do
+          res2 <- unify' (typeOf e2) BoolType env argOrd subst1
+          case res2 of
+            Just (t2, subst2) -> do
+              res12 <- unify' t1 t2 env argOrd subst2
+              case res12 of
                 Just (_, subst') ->
                   return (BoolType, subst')
                 Nothing -> do
@@ -339,8 +359,9 @@ infer decls = do
                      "' with type '" ++ show BoolType ++ "'."
           return (Error, subst)
 
-    mkEqOpType e1 e2 env argOrd subst =
-      case unify' (typeOf e1) (typeOf e2) env argOrd subst of
+    mkEqOpType e1 e2 env argOrd subst = do
+      res <- unify' (typeOf e1) (typeOf e2) env argOrd subst
+      case res of
         Just (_, subst') ->
           return (BoolType, subst')
         Nothing -> do
@@ -350,9 +371,11 @@ infer decls = do
 
     mkRelOpType e1 e2 env argOrd subst = do
       (expectedType, subst') <- makeIntersect env argOrd subst IntType RealType
-      case unify' (typeOf e1) expectedType env argOrd subst of
+      res1 <- unify' (typeOf e1) expectedType env argOrd subst
+      case res1 of
         Just (_, subst1) -> do
-          case unify' (typeOf e2) expectedType env argOrd subst1 of
+          res2 <- unify' (typeOf e2) expectedType env argOrd subst1
+          case res2 of
             Just (_, subst2) -> do
               return (BoolType, subst2)
             Nothing -> do
@@ -414,7 +437,8 @@ infer decls = do
 
     inferExpr (UnaryMinusExpr e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst
-      case unify' (typeOf e') (intersect IntType RealType) env' argOrd' subst' of
+      res <- unify' (typeOf e') (intersect IntType RealType) env' argOrd' subst'
+      case res of
         Just (t, subst'') -> return ((TUnaryMinusExpr e', t), env', argOrd', subst'')
         Nothing -> do putStrLn $ "Couldn't match expected type 'Int' or 'Real' with actual type '" ++
                                  show (typeOf e') ++ "'."
@@ -422,39 +446,37 @@ infer decls = do
 
     inferExpr (BangExpr e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst
-      case unify' (typeOf e') BoolType env' argOrd' subst' of
+      res <- unify' (typeOf e') BoolType env' argOrd' subst'
+      case res of
         Just (t, subst'') -> return ((TBangExpr e', BoolType), env', argOrd', subst'')
         Nothing -> do putStrLn $ "Couldn't match expected type 'Bool' with actual type '" ++
                                  show (typeOf e') ++ "'."
                       return ((TBangExpr e', BoolType), env', argOrd', subst')
 
+    -- TODO: Polymorphic functions are specialized since the Forall has no effect :(
     inferExpr (CallExpr f arg) env argOrd subst = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
       tDom <- mkTypeVar
       tCod <- mkTypeVar
-      case unify' (typeOf f') (Arrow tDom tCod) env'' argOrd'' subst'' of
-        Just(t, subst''') ->
-          case subtype (typeOf arg') tDom env'' argOrd'' subst''' of
-            (True, subst'''') -> do
-              return ((TCallExpr f' arg', tCod), env'', argOrd'', subst'''')
-            (False, _) -> do
-              putStrLn $ "Couldn't match expected type '" ++ show tDom ++
-                         "' with actual type '" ++ show (typeOf arg') ++ "'."
-              return ((TCallExpr f' arg', Error), env, argOrd'', subst)
-        Nothing -> do
-            putStrLn $ "Couldn't match expected type '" ++ show (Arrow tDom tCod) ++
-                       "' with actual type '" ++ show (typeOf f') ++ "'."
-            return ((TCallExpr f' arg', Error), env, argOrd'', subst)
+      (b, subst''') <- subtype (typeOf f') (Arrow (typeOf arg') tCod) env'' argOrd'' subst''
+      case b of
+        True -> do
+          return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
+        False -> do
+          putStrLn $ "Couldn't match expected type '" ++ show tDom ++
+                     "' with actual type '" ++ show (typeOf arg') ++ "'."
+          return ((TCallExpr f' arg', Error), env, argOrd'', subst)
 
     inferExpr (TypeConstrainedExpr e ty) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst
-      case subtype (typeOf e') ty env' argOrd' subst' of
-        (False, _) -> do
+      (b, subst'') <- subtype (typeOf e') ty env' argOrd' subst'
+      case b of
+        True -> return (e', env', argOrd', subst'')
+        False -> do
           putStrLn $ "Couldn't match expected type '" ++ show ty ++
                      "' with actual type '" ++ show (typeOf e') ++ "'."
           return (e', env', argOrd', subst')
-        (True, subst'') -> return (e', env', argOrd', subst'')
 
     inferExpr (ListExpr es) env argOrd subst = do
       (es', env', argOrd', subst') <- inferList inferExpr env argOrd subst es
@@ -525,11 +547,12 @@ infer decls = do
           return ((TFieldAccessExpr lve' field, t), env', subst'')
         Nothing -> do -- Reading from variable
           u <- mkTypeVar
-          case subtype (Record True [(field, u)]) (typeOf lve') env' argOrd subst' of
-            (True, subst'') ->
+          (b, subst'') <- subtype (Record True [(field, u)]) (typeOf lve') env' argOrd subst'
+          case b of
+            True ->
               let subst''' = extendRecord field u (typeOf lve') subst''
               in return ((TFieldAccessExpr lve' field, u), env', subst''')
-            (False, _) -> do
+            False -> do
               putStrLn $ "'" ++ field ++ "' is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst)
 
@@ -537,9 +560,11 @@ infer decls = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst
       (e', env'', argOrd', subst'') <- inferExpr e env' argOrd subst'
       arrayTy <- mkTypeVar
-      case unify' (typeOf lve') (Array arrayTy) env'' argOrd' subst'' of
-        Just (_, subst''') ->
-          case unify' (typeOf e') IntType env'' argOrd' subst''' of
+      resArray <- unify' (typeOf lve') (Array arrayTy) env'' argOrd' subst''
+      case resArray of
+        Just (_, subst''') -> do
+          resSubscript <- unify' (typeOf e') IntType env'' argOrd' subst'''
+          case resSubscript of
             Just (_, subst'''') ->
               return ((TArrayAccessExpr lve' e', arrayTy), env'', subst'''')
             Nothing -> do
