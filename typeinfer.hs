@@ -437,19 +437,24 @@ infer decls = do
                                  show (typeOf e') ++ "'."
                       return ((TBangExpr e', BoolType), env', argOrd', subst')
 
+    -- TODO: Polymorphic functions are STILL being specialized :(
     inferExpr (CallExpr f arg) env argOrd subst = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
       tDom <- mkTypeVar
       tCod <- mkTypeVar
-      (b, subst''') <- subtype (typeOf f') (Arrow (typeOf arg') tCod) env'' argOrd'' subst''
-      case b of
-        True -> do
-          let tCod' = instansiatePoly subst''' (typeOf arg') tCod
-          return ((TCallExpr f' arg', tCod'), env'', argOrd'', subst''')
-        False -> do
-          putStrLn $ "Couldn't match expected type '" ++ show tDom ++
-                     "' with actual type '" ++ show (typeOf arg') ++ "'."
+      unify' (typeOf f') (Arrow tDom tCod) env'' argOrd'' subst'' >>= \case
+        Just (funcTy, subst''') -> do
+          (b, subst'''') <- subtype (typeOf arg') tDom env'' argOrd'' subst'''
+          case b of
+            True -> return ((TCallExpr f' arg', tCod), env'', argOrd'', subst'''')
+            False -> do
+              putStrLn $ "Couldn't match expected type '" ++ show tDom ++
+                         "' with actual type '" ++ show (typeOf arg') ++ "'."
+              return ((TCallExpr f' arg', Error), env, argOrd'', subst)
+        Nothing -> do
+          putStrLn $ "Couldn't match expected type '" ++ show (Arrow tDom tCod) ++
+                     "' with actual type '" ++ show (typeOf f') ++ "'."
           return ((TCallExpr f' arg', Error), env, argOrd'', subst)
 
     inferExpr (TypeConstrainedExpr e ty) env argOrd subst = do

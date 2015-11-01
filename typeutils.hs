@@ -4,6 +4,7 @@ module TypeUtils (Env, Substitution, ArgOrd, Bindings,
 import qualified Data.Unique as U
 import Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.List as List
 import TypedAst
 
@@ -20,25 +21,26 @@ generalize u subst =
     Nothing -> return subst
  
 follow :: Substitution -> Type -> Type
-follow subst = fol
+follow subst = fol Set.empty
   where
-    fol (TypeVar u) =
+    fol visited (TypeVar u) =
       case Map.lookup u subst of
         Just (TypeVar u') ->
           if u == u' then TypeVar u'
-          else fol (TypeVar u')
-        Just t -> fol t
+          else if Set.member u' visited then (TypeVar u')
+               else fol (Set.insert u visited) (TypeVar u')
+        Just t -> fol visited t
         Nothing -> TypeVar u
-    fol (Array ty) = Array (fol ty)
-    fol (Tuple types) = Tuple (List.map fol types)
-    fol (Record b fields) =
-      let f (s, ty) = (s, fol ty)
+    fol visited (Array ty) = Array (fol visited ty)
+    fol visited (Tuple types) = Tuple (List.map (fol visited) types)
+    fol visited (Record b fields) =
+      let f (s, ty) = (s, fol visited ty)
       in Record b (List.map f fields)
-    fol (Arrow tDom tCod) = Arrow (fol tDom) (fol tCod)
-    fol (Union t1 t2) = union (fol t1) (fol t2)
-    fol (Forall u ty) = Forall u (fol ty)
-    fol (Intersect t1 t2) = Intersect (fol t1) (fol t2)
-    fol t = t
+    fol visited (Arrow tDom tCod) = Arrow (fol visited tDom) (fol visited tCod)
+    fol visited (Union t1 t2) = union (fol visited t1) (fol visited t2)
+    fol visited (Forall u ty) = Forall u (fol visited ty)
+    fol visited (Intersect t1 t2) = Intersect (fol visited t1) (fol visited t2)
+    fol _ t = t
 
 makeBindings :: ArgOrd -> String -> [Type] -> Bindings
 makeBindings argOrd s types =

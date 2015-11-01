@@ -37,6 +37,7 @@ instance Show Type where
 
   show (Arrow t1 (Union t2 t3)) = show t1 ++ " -> (" ++ show t2 ++ " | " ++ show t3 ++ ")"
   show (Arrow (Union t1 t2) t3) = "(" ++ show t1 ++ " | " ++ show t2 ++ ") -> " ++ show t3 ++ ")"
+  show (Arrow (Arrow t1 t2) t3) = "(" ++ show t1 ++ " -> " ++ show t2 ++ ")" ++ " -> " ++ show t3
   show (Arrow t1 t2) = show t1 ++ " -> " ++ show t2
 
   show (Name s []) = s

@@ -144,6 +144,10 @@ subtype t1 t2 env argOrd subst =
       (b1, subst') <- sub trace bind1 bind2 assum subst tDom2 tDom1
       (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod1 tCod2
       return (b1 && b2, subst'')
+    sub trace bind1 bind2 assum subst (Tuple [t1]) t2 =
+      sub trace bind1 bind2 assum subst t1 t2
+    sub trace bind1 bind2 assum subst t1 (Tuple [t2]) =
+      sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst (Tuple tys1) (Tuple tys2) =
       if List.length tys1 >= List.length tys2 then
         foldM f (True, subst) (List.zip tys1 tys2)

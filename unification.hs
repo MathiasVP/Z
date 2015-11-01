@@ -26,7 +26,7 @@ unifyTypes types env argOrd subst = do
   foldM f (t, subst) types
   where f (ty, subst) ty' =
           unify ty ty' env argOrd subst
-
+          
 inserts :: Ord a => Set a -> [a] -> Set a
 inserts = List.foldr Set.insert
 
@@ -43,7 +43,8 @@ unify t1 t2 env argOrd subst =
           return (t, Map.insert u t subst)
         (t, TypeVar u') ->
           return (t, Map.insert u' t subst)
-        (t, t') -> uni trace bind1 bind2 t t' subst
+        (t, t') ->
+          uni trace bind1 bind2 t t' subst
     uni trace bind1 bind2 (Forall u t1) t2 subst = do
       (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
       subst'' <- generalize u subst'
