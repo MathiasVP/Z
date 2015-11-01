@@ -46,7 +46,8 @@ unify t1 t2 env argOrd subst =
         (t, t') -> uni trace bind1 bind2 t t' subst
     uni trace bind1 bind2 (Forall u t1) t2 subst = do
       (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
-      return (ty, generalize u subst')
+      subst'' <- generalize u subst'
+      return (ty, subst'')
     uni trace bind1 bind2 t1 (Forall u t2) subst =
       uni trace bind1 bind2 (Forall u t2) t1 subst
     uni trace bind1 bind2 (TypeVar u) t subst =
@@ -57,7 +58,7 @@ unify t1 t2 env argOrd subst =
     uni trace bind1 bind2 t (TypeVar u) subst = uni trace bind1 bind2 (TypeVar u) t subst
     uni trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
       | Set.member s1 trace && Set.member s2 trace =
-        return (union (instansiate' t1 bind1') (instansiate' t2 bind2'), subst)
+        return (union (instansiates t1 bind1') (instansiates t2 bind2'), subst)
       | Set.member s1 trace =
         uni (Set.insert s2 trace) bind1 bind2' t1 t2' subst
       | Set.member s2 trace =
@@ -70,7 +71,7 @@ unify t1 t2 env argOrd subst =
             bind2' = makeBindings argOrd s2 types2
     uni trace bind1 bind2 t1@(Name s types) t2 subst
       | Set.member s trace =
-        return (union (instansiate' t1 bind) (instansiate' t2 bind2), subst)
+        return (union (instansiates t1 bind) (instansiates t2 bind2), subst)
       | otherwise =
         uni (Set.insert s trace) bind bind2 t t2 subst
       where t = lookup bind1 env s
@@ -151,7 +152,9 @@ unify' t1 t2 env argOrd subst =
         (t, t') -> uni' trace bind1 bind2 t t' subst
     uni' trace bind1 bind2 (Forall u t1) t2 subst = do
       uni' trace bind1 bind2 t1 t2 subst >>= \case
-        Just (ty, subst') -> return $ Just (ty, generalize u subst')
+        Just (ty, subst') -> do
+          subst'' <- generalize u subst'
+          return $ Just (ty, subst'')
         Nothing -> return Nothing
     uni' trace bind1 bind2 t1 (Forall u t2) subst =
       uni' trace bind1 bind2 (Forall u t2) t1 subst

@@ -15,8 +15,6 @@ data Variance
   | Top
   | Bottom
 
-type Assumptions = Map (String, String) ([Type], [Type])
-
 lub :: Variance -> Variance -> Variance
 lub Positive Positive = Positive
 lub Negative Negative = Negative
@@ -24,8 +22,8 @@ lub v Bottom = v
 lub Bottom v = v
 lub _ _ = Top
 
-lub' :: [Variance] -> Variance
-lub' = List.foldr lub Bottom
+lubs :: [Variance] -> Variance
+lubs = List.foldr lub Bottom
 
 invert :: Variance -> Variance
 invert Positive = Negative
@@ -41,7 +39,7 @@ variance env argOrd t s =
             Just ty ->
               let order = argOrd ! s'
                   names = List.map (order !) [0..]
-                  ty' = instansiate' ty (Map.fromList (List.zip names tys))
+                  ty' = instansiates ty (Map.fromList (List.zip names tys))
               in var (Set.insert s' trace) v ty'
             Nothing
               | s == s'   -> lub v Positive
@@ -50,13 +48,13 @@ variance env argOrd t s =
         lub (invert (var trace v t1)) (var trace v t2)
       var trace v (Forall u ty) = var trace v ty
       var trace v (Union t1 t2) = lub (var trace v t1) (var trace v t2)
-      var trace v (Tuple ts) = lub' (List.map (var trace v) ts)
-      var trace v (Record b fields) = lub' (List.map (var trace v . snd) fields)
+      var trace v (Tuple ts) = lubs (List.map (var trace v) ts)
+      var trace v (Record b fields) = lubs (List.map (var trace v . snd) fields)
       var trace v (Array ty) = var trace v ty
-      var trace v (Intersect t1 t2) = lub' (List.map (var trace v) [t1, t2])
+      var trace v (Intersect t1 t2) = lubs (List.map (var trace v) [t1, t2])
       var trace v _ = v
-  in var Set.empty Bottom t
-
+  in var Set.empty Bottom t  
+  
 subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Bool, Substitution)
 subtype t1 t2 env argOrd subst =
   let
@@ -65,12 +63,16 @@ subtype t1 t2 env argOrd subst =
     sub trace bind1 bind2 assum subst (Forall u t1) t2 = do
       (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
       case b of
-        True -> return (True, generalize u subst')
+        True -> do
+          subst'' <- generalize u subst'
+          return (True, subst'')
         False -> return (False, subst')
     sub trace bind1 bind2 assum subst t1 (Forall u t2) = do
       (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
       case b of
-        True -> return (True, generalize u subst')
+        True -> do
+          subst'' <- generalize u subst'
+          return (True, subst'')
         False -> return (False, subst')
     sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of

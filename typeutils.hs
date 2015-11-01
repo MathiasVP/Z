@@ -1,6 +1,6 @@
 module TypeUtils (Env, Substitution, ArgOrd, Bindings,
                   generalize, follow, makeBindings,
-                  instansiate, instansiate') where
+                  instansiate, instansiates, instansiatePoly) where
 import qualified Data.Unique as U
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -12,13 +12,13 @@ type Env = Map String Type
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
 
-generalize :: U.Unique -> Substitution -> Substitution
+generalize :: U.Unique -> Substitution -> IO Substitution
 generalize u subst =
   case Map.lookup u subst of
     Just (TypeVar u') -> generalize u' (Map.delete u subst)
-    Just _ -> Map.delete u subst
-    Nothing -> subst
-    
+    Just _ -> return $ Map.delete u subst
+    Nothing -> return subst
+ 
 follow :: Substitution -> Type -> Type
 follow subst = fol
   where
@@ -29,11 +29,6 @@ follow subst = fol
           else fol (TypeVar u')
         Just t -> fol t
         Nothing -> TypeVar u
-    fol IntType = IntType
-    fol StringType = StringType
-    fol BoolType = BoolType
-    fol RealType = RealType
-    fol (Name s types) = Name s types
     fol (Array ty) = Array (fol ty)
     fol (Tuple types) = Tuple (List.map fol types)
     fol (Record b fields) =
@@ -42,14 +37,30 @@ follow subst = fol
     fol (Arrow tDom tCod) = Arrow (fol tDom) (fol tCod)
     fol (Union t1 t2) = union (fol t1) (fol t2)
     fol (Forall u ty) = Forall u (fol ty)
-    fol Error = Error
     fol (Intersect t1 t2) = Intersect (fol t1) (fol t2)
+    fol t = t
 
 makeBindings :: ArgOrd -> String -> [Type] -> Bindings
 makeBindings argOrd s types =
   case Map.lookup s argOrd of
     Just argOrd -> Map.fromList $ List.zip (Map.elems argOrd) types
     Nothing -> Map.empty
+
+instansiatePoly :: Substitution -> Type -> Type -> Type
+instansiatePoly subst t1 t2 = inst t2
+  where
+    inst t =
+      case follow subst t of
+        TypeVar u -> t1
+        Name s tys -> Name s (List.map inst tys)
+        Forall u ty -> Forall u (inst ty)
+        Arrow tDom tCod -> Arrow (inst tDom) (inst tCod)
+        Union t1 t2 -> union (inst t1) (inst t2)
+        Tuple tys -> Tuple (List.map inst tys)
+        Record b fields -> Record b (List.map (\(s, ty) -> (s, inst ty)) fields)
+        Array ty -> Array (inst ty)
+        Intersect t1 t2 -> intersect (inst t1) (inst t2)
+        t -> t
 
 instansiate :: String -> Type -> Type -> Type
 instansiate name ty t =
@@ -64,13 +75,9 @@ instansiate name ty t =
       inst (Record b fields) = Record b (List.map (\(s, ty) -> (s, inst ty)) fields)
       inst (Array ty) = Array (inst ty)
       inst (TypeVar u) = TypeVar u
-      inst Error = Error
-      inst IntType = IntType
-      inst RealType = RealType
-      inst BoolType = BoolType
-      inst StringType = StringType
       inst (Intersect t1 t2) = intersect (inst t1) (inst t2)
+      inst t = t
   in inst t
 
-instansiate' :: Type -> Map String Type -> Type
-instansiate' = Map.foldrWithKey instansiate
+instansiates :: Type -> Map String Type -> Type
+instansiates = Map.foldrWithKey instansiate

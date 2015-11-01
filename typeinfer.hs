@@ -112,10 +112,10 @@ infer decls = do
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
       (b, subst'''') <- subtype infRetTy retTy' env'' argOrd'' subst'''
       case b of
-        True -> do
+        True ->
           let functionTy' = List.foldr (makeForall subst'''') (makeArrow types retTy') types
               globEnv = Map.insert name functionTy' env
-          return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst'''')
+          in return (TFunDecl name tyArgs args' retTy' statement', globEnv, argOrd, subst'''')
         False -> do
           let globEnv = Map.insert name Error env
           putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
@@ -125,7 +125,7 @@ infer decls = do
     commMaybeIO :: Maybe (IO (Maybe t)) -> IO (Maybe (Maybe t))
     commMaybeIO Nothing = return Nothing
     commMaybeIO (Just iom) = iom >>= return . Just
-          
+
     inferMatchExpr :: Maybe Type -> MatchExpr -> Env -> ArgOrd -> Substitution ->
                       IO (TypedMatchExpr, Env, ArgOrd, Substitution)
     inferMatchExpr tm (TupleMatchExpr mes) env argOrd subst = do
@@ -267,10 +267,10 @@ infer decls = do
       return (TAssignStatement (Left me') e', envMatchExpr, argOrd'', substMatchExpr)
 
     inferStatement (AssignStatement (Right lve) e) env argOrd subst = do
-      (e', env, argOrd', substExpr) <- inferExpr e env argOrd subst
-      (lve', env', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve
-                                         env argOrd' substExpr
-      return (TAssignStatement (Right lve') e', env', argOrd', substLValueExpr)
+      (e', env', argOrd', substExpr) <- inferExpr e env argOrd subst
+      (lve', env'', substLValueExpr) <- inferLValueExpr (Just $ typeOf e') lve
+                                         env' argOrd' substExpr
+      return (TAssignStatement (Right lve') e', env'', argOrd', substLValueExpr)
 
     -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
@@ -437,7 +437,6 @@ infer decls = do
                                  show (typeOf e') ++ "'."
                       return ((TBangExpr e', BoolType), env', argOrd', subst')
 
-    -- TODO: Polymorphic functions are specialized since the Forall has no effect :(
     inferExpr (CallExpr f arg) env argOrd subst = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
@@ -446,7 +445,8 @@ infer decls = do
       (b, subst''') <- subtype (typeOf f') (Arrow (typeOf arg') tCod) env'' argOrd'' subst''
       case b of
         True -> do
-          return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
+          let tCod' = instansiatePoly subst''' (typeOf arg') tCod
+          return ((TCallExpr f' arg', tCod'), env'', argOrd'', subst''')
         False -> do
           putStrLn $ "Couldn't match expected type '" ++ show tDom ++
                      "' with actual type '" ++ show (typeOf arg') ++ "'."
