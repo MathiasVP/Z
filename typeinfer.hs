@@ -2,39 +2,20 @@
 
 module TypeInfer where
 import Control.Monad
+import Control.Monad.State.Lazy
 import Data.Ord
 import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Maybe as Maybe
+import Data.Unique
 import Data.Set (Set)
 import Data.Map (Map)
 import TypedAst
 import Unification
 import Subtype
+import Utils
 import TypeUtils
-
-makeArrow :: [Type] -> Type -> Type
-makeArrow types retTy = List.foldr Arrow retTy types
-
-makeForall :: Substitution -> Type -> Type -> Type
-makeForall subst (TypeVar u) ty =
-  case follow subst (TypeVar u) of
-    TypeVar _ -> Forall u ty
-    _         -> ty
-makeForall _ _ ty = ty
-
-makeIntersect :: Env -> ArgOrd -> Substitution -> Type -> Type -> IO (Type, Substitution)
-makeIntersect env argOrd subst t1 t2 = do
-  u <- mkTypeVar
-  (_, subst') <- unify u (intersect t1 t2) env argOrd subst
-  return (u, subst')
-
-makeRecord :: Env -> ArgOrd -> Substitution -> Bool -> [(String, Type)] -> IO (Type, Substitution)
-makeRecord env argOrd subst b fields = do
-  u <- mkTypeVar
-  (_, subst') <- unify u (Record b fields) env argOrd subst
-  return (u, subst')
 
 extendRecord :: String -> Type -> Type -> Substitution -> Substitution
 extendRecord name ty (TypeVar u) subst =
@@ -54,14 +35,6 @@ normaliseFields = List.sortBy (comparing fst)
 equalRecordFields fields1 fields2 =
   let f fields = List.map fst (normaliseFields fields)
   in f fields1 == f fields2
-
-exprOf = fst
-typeOf = snd
-
-foldlWithKeyM :: Monad m => (a -> k -> b -> m a) -> a -> Map k b -> m a
-foldlWithKeyM f acc = Map.foldlWithKey f' (return acc)
-    where
-        f' ma k b = ma >>= \a -> f a k b
 
 mergeSubstitution :: Env -> ArgOrd -> Substitution -> Substitution -> IO Substitution
 mergeSubstitution env argOrd subst1 subst2 = foldlWithKeyM f subst1 subst2
@@ -437,23 +410,15 @@ infer decls = do
                                  show (typeOf e') ++ "'."
                       return ((TBangExpr e', BoolType), env', argOrd', subst')
 
-    -- TODO: Polymorphic functions are STILL being specialized :(
     inferExpr (CallExpr f arg) env argOrd subst = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
-      tDom <- mkTypeVar
       tCod <- mkTypeVar
-      unify' (typeOf f') (Arrow tDom tCod) env'' argOrd'' subst'' >>= \case
-        Just (funcTy, subst''') -> do
-          (b, subst'''') <- subtype (typeOf arg') tDom env'' argOrd'' subst'''
-          case b of
-            True -> return ((TCallExpr f' arg', tCod), env'', argOrd'', subst'''')
-            False -> do
-              putStrLn $ "Couldn't match expected type '" ++ show tDom ++
-                         "' with actual type '" ++ show (typeOf arg') ++ "'."
-              return ((TCallExpr f' arg', Error), env, argOrd'', subst)
-        Nothing -> do
-          putStrLn $ "Couldn't match expected type '" ++ show (Arrow tDom tCod) ++
+      subtype (Arrow (typeOf arg') tCod) (typeOf f') env'' argOrd'' subst'' >>= \case
+        (True, subst''') -> do
+          return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
+        (False, _) -> do
+          putStrLn $ "Couldn't match expected type '" ++ show (Arrow (typeOf arg') tCod) ++
                      "' with actual type '" ++ show (typeOf f') ++ "'."
           return ((TCallExpr f' arg', Error), env, argOrd'', subst)
 
@@ -563,34 +528,53 @@ infer decls = do
                      show (typeOf lve') ++ "'."
           return ((TArrayAccessExpr lve' e', Error), env'', subst)
 
+    replaceType :: Substitution -> Type -> Type
     replaceType subst ty =
-      let replace trace IntType = IntType
-          replace trace BoolType = BoolType
-          replace trace StringType = StringType
-          replace trace RealType = RealType
-          replace trace (Name s types) = Name s (List.map (replace trace) types)
-          replace trace (Array ty) = Array ((replace trace) ty)
+      let replace :: Set Unique -> Type -> State (Set Unique) Type
+          replace trace IntType = return IntType
+          replace trace BoolType = return BoolType
+          replace trace StringType = return StringType
+          replace trace RealType = return RealType
+          replace trace (Name s types) =
+            mapM (replace trace) types >>= return . Name s 
+          replace trace (Array ty) = replace trace ty >>= return . Array
           replace trace (Tuple [ty]) = replace trace ty
-          replace trace (Tuple types) = Tuple (List.map (replace trace) types)
+          replace trace (Tuple types) =
+            mapM (replace trace) types >>= return . Tuple
           replace trace (Record b fields) =
-            Record b (List.map (\(s, ty) -> (s, replace trace ty)) fields)
-          replace trace (Arrow tDom tCod) = Arrow (replace trace tDom) (replace trace tCod)
-          replace trace (Union t1 t2) = union (replace trace t1) (replace trace t2)
-          replace trace (Forall u ty) =
-            case replace trace (TypeVar u) of
-              TypeVar u' -> Forall u' (replace trace ty)
-              _ -> replace trace ty
+            mapM field fields >>= return . Record b
+            where field (s, ty) = replace trace ty >>= \ty -> return (s, ty)
+          replace trace (Arrow tDom tCod) = do
+            tDom' <- replace trace tDom
+            tCod' <- replace trace tCod
+            return $ Arrow tDom' tCod'
+          replace trace (Union t1 t2) = do
+            t1' <- replace trace t1
+            t2' <- replace trace t2
+            return $ union t1' t2'
+          replace trace (Intersect t1 t2) = do
+            t1' <- replace trace t1
+            t2' <- replace trace t2
+            return $ intersect t1 t2
+          replace trace (Forall u ty) = do
+            free <- get
+            put (Set.insert u free)
+            ty' <- replace trace ty
+            return $ Forall u ty'
           replace trace (TypeVar u)
-            | Set.member u trace = TypeVar u
-            | otherwise =
-                case follow subst (TypeVar u) of
-                  TypeVar u'
-                    | u == u' -> TypeVar u
-                    | otherwise -> replace (Set.insert u trace) (TypeVar u')
-                  t -> replace (Set.insert u trace) t
-          replace trace Error = Error
-          replace trace (Intersect t1 t2) = intersect (replace trace t1) (replace trace t2)
-      in replace Set.empty ty
+            | Set.member u trace = return $ TypeVar u
+            | otherwise = do
+              gets (Set.member (nearestUnique u subst)) >>=
+                \case
+                  True -> return $ TypeVar (nearestUnique u subst)
+                  False -> case follow subst (TypeVar u) of
+                             TypeVar u'
+                               | u == u' -> return $ TypeVar u
+                               | otherwise -> replace (Set.insert u trace)
+                                                      (TypeVar u')
+                             t -> replace (Set.insert u trace) t
+          replace trace Error = return Error
+      in evalState (replace Set.empty ty) Set.empty
 
     replaceDecl subst td =
       case td of
@@ -603,20 +587,16 @@ infer decls = do
     replaceMatchExpr subst (tme, ty) =
       let replace (TTupleMatchExpr tmes, ty) =
             (TTupleMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
-            where ty' = replaceType subst ty
           replace (TListMatchExpr tmes, ty) =
             (TListMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
-            where ty' = replaceType subst ty
           replace (TSetMatchExpr tmes, ty) =
             (TSetMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
-            where ty' = replaceType subst ty
           replace (TRecordMatchExpr fields, ty) =
             (TRecordMatchExpr (List.map f fields), ty')
             where f (s, tme) = (s, replaceMatchExpr subst tme)
-                  ty' = replaceType subst ty
           replace (tme, ty) = (tme, ty')
-            where ty' = replaceType subst ty
       in replace (tme, ty)
+      where ty' = replaceType subst ty
 
     replaceStatement subst ts =
       let replace (TIfStatement te ts tsm) =
@@ -645,87 +625,72 @@ infer decls = do
 
     replaceExpr subst (te, ty) =
       let replace (TIntExpr n, ty) = (TIntExpr n, ty')
-            where ty' = replaceType subst ty
           replace (TRealExpr d, ty) = (TRealExpr d, ty')
-            where ty' = replaceType subst ty
           replace (TBoolExpr b, ty) = (TBoolExpr b, ty')
-            where ty' = replaceType subst ty
           replace (TStringExpr s, ty) = (TStringExpr s, ty')
-            where ty' = replaceType subst ty
           replace (TOrExpr te1 te2, ty) =
             (TOrExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TAndExpr te1 te2, ty) =
             (TAndExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TEqExpr te1 te2, ty) =
             (TEqExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TNeqExpr te1 te2, ty) =
             (TNeqExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TLtExpr te1 te2, ty) =
             (TLtExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TGtExpr te1 te2, ty) =
             (TGtExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TLeExpr te1 te2, ty) =
             (TLeExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TGeExpr te1 te2, ty) =
             (TGeExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TAddExpr te1 te2, ty) =
             (TAddExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TSubExpr te1 te2, ty) =
             (TSubExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TMultExpr te1 te2, ty) =
             (TMultExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TDivExpr te1 te2, ty) =
             (TDivExpr (replace te1) (replace te2), ty')
-            where ty' = replaceType subst ty
           replace (TUnaryMinusExpr te, ty) =
             (TUnaryMinusExpr (replace te), ty')
-            where ty' = replaceType subst ty
           replace (TBangExpr te, ty) =
             (TBangExpr (replace te), ty')
-            where ty' = replaceType subst ty
           replace (TCallExpr teFun teArg, ty) =
             (TCallExpr (replace teFun) (replace teArg), ty')
-            where ty' = replaceType subst ty
           replace (TListExpr tes, ty) =
             (TListExpr (List.map replace tes), ty')
-            where ty' = replaceType subst ty
           replace (TTupleExpr tes, ty) =
             (TTupleExpr (List.map replace tes), ty')
-            where ty' = replaceType subst ty
           replace (TSetExpr tes, ty) =
             (TSetExpr (List.map replace tes), ty')
-            where ty' = replaceType subst ty
           replace (TRecordExpr fields, ty) =
             (TRecordExpr (List.map f fields), ty')
             where f (s, te) = (s, replace te)
                   ty' = replaceType subst ty
           replace (TLValue tlve, ty) =
             (TLValue (replaceLValueExpr subst tlve), ty')
-            where ty' = replaceType subst ty
+            
           replace (TLambdaExpr tmes ts, ty) =
             (TLambdaExpr (List.map (replaceMatchExpr subst) tmes)
                         (replaceStatement subst ts), ty')
-            where ty' = replaceType subst ty
       in replace (te, ty)
+      where ty' = replaceType subst ty
 
     replaceLValueExpr subst (tlve, ty) =
       let replace (TVarExpr s, ty) = (TVarExpr s, ty')
-            where ty' = replaceType subst ty
           replace (TFieldAccessExpr tlve s, ty) =
             (TFieldAccessExpr (replace tlve) s, ty')
-            where ty' = replaceType subst ty
           replace (TArrayAccessExpr tlve te, ty) =
             (TArrayAccessExpr (replace tlve) (replaceExpr subst te), ty')
-            where ty' = replaceType subst ty
       in replace (tlve, ty)
+      where ty' = replaceType subst ty
+
+nearestUnique :: Unique -> Substitution -> Unique
+nearestUnique u subst =
+  case Map.lookup u subst of
+    Just (TypeVar u')
+      | u == u' -> u
+      | otherwise -> nearestUnique u' subst
+    Just _ -> u
+    Nothing -> u

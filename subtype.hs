@@ -60,20 +60,10 @@ subtype t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
-    sub trace bind1 bind2 assum subst (Forall u t1) t2 = do
-      (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
-      case b of
-        True -> do
-          subst'' <- generalize u subst'
-          return (True, subst'')
-        False -> return (False, subst')
-    sub trace bind1 bind2 assum subst t1 (Forall u t2) = do
-      (b, subst') <- sub trace bind1 bind2 assum subst t1 t2
-      case b of
-        True -> do
-          subst'' <- generalize u subst'
-          return (True, subst'')
-        False -> return (False, subst')
+    sub trace bind1 bind2 assum subst (Forall u t1) t2 =
+      sub trace bind1 bind2 assum subst t1 t2
+    sub trace bind1 bind2 assum subst t1 (Forall u t2) =
+      sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of
         TypeVar u -> return (True, Map.insert u t1 subst)

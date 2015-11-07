@@ -1,6 +1,4 @@
-module TypeUtils (Env, Substitution, ArgOrd, Bindings,
-                  generalize, follow, makeBindings,
-                  instansiate, instansiates, instansiatePoly) where
+module TypeUtils where
 import qualified Data.Unique as U
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -13,13 +11,9 @@ type Env = Map String Type
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
 
-generalize :: U.Unique -> Substitution -> IO Substitution
-generalize u subst =
-  case Map.lookup u subst of
-    Just (TypeVar u') -> generalize u' (Map.delete u subst)
-    Just _ -> return $ Map.delete u subst
-    Nothing -> return subst
- 
+exprOf = fst
+typeOf = snd
+
 follow :: Substitution -> Type -> Type
 follow subst = fol Set.empty
   where
@@ -48,22 +42,6 @@ makeBindings argOrd s types =
     Just argOrd -> Map.fromList $ List.zip (Map.elems argOrd) types
     Nothing -> Map.empty
 
-instansiatePoly :: Substitution -> Type -> Type -> Type
-instansiatePoly subst t1 t2 = inst t2
-  where
-    inst t =
-      case follow subst t of
-        TypeVar u -> t1
-        Name s tys -> Name s (List.map inst tys)
-        Forall u ty -> Forall u (inst ty)
-        Arrow tDom tCod -> Arrow (inst tDom) (inst tCod)
-        Union t1 t2 -> union (inst t1) (inst t2)
-        Tuple tys -> Tuple (List.map inst tys)
-        Record b fields -> Record b (List.map (\(s, ty) -> (s, inst ty)) fields)
-        Array ty -> Array (inst ty)
-        Intersect t1 t2 -> intersect (inst t1) (inst t2)
-        t -> t
-
 instansiate :: String -> Type -> Type -> Type
 instansiate name ty t =
   let inst (Name s [])
@@ -83,3 +61,17 @@ instansiate name ty t =
 
 instansiates :: Type -> Map String Type -> Type
 instansiates = Map.foldrWithKey instansiate
+
+mkTypeVar :: IO Type
+mkTypeVar = U.newUnique >>=
+              return . TypeVar
+
+makeArrow :: [Type] -> Type -> Type
+makeArrow types retTy = List.foldr Arrow retTy types
+
+makeForall :: Substitution -> Type -> Type -> Type
+makeForall subst (TypeVar u) ty =
+  case follow subst (TypeVar u) of
+    TypeVar _ -> Forall u ty
+    _         -> ty
+makeForall _ _ ty = ty

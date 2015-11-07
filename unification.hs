@@ -16,9 +16,17 @@ import Ast
 import TypedAst
 import TypeUtils
 
-mkTypeVar :: IO Type
-mkTypeVar = U.newUnique >>=
-              return . TypeVar
+makeIntersect :: Env -> ArgOrd -> Substitution -> Type -> Type -> IO (Type, Substitution)
+makeIntersect env argOrd subst t1 t2 = do
+  u <- mkTypeVar
+  (_, subst') <- unify u (intersect t1 t2) env argOrd subst
+  return (u, subst')
+
+makeRecord :: Env -> ArgOrd -> Substitution -> Bool -> [(String, Type)] -> IO (Type, Substitution)
+makeRecord env argOrd subst b fields = do
+  u <- mkTypeVar
+  (_, subst') <- unify u (Record b fields) env argOrd subst
+  return (u, subst')
 
 unifyTypes :: [Type] -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
 unifyTypes types env argOrd subst = do
@@ -38,7 +46,7 @@ unify t1 t2 env argOrd subst =
     uni trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') ->
-          return (TypeVar u, Map.insert u (TypeVar u') subst)
+          return (TypeVar u', Map.insert u (TypeVar u') subst)
         (TypeVar u, t) ->
           return (t, Map.insert u t subst)
         (t, TypeVar u') ->
@@ -47,8 +55,7 @@ unify t1 t2 env argOrd subst =
           uni trace bind1 bind2 t t' subst
     uni trace bind1 bind2 (Forall u t1) t2 subst = do
       (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
-      subst'' <- generalize u subst'
-      return (ty, subst'')
+      return (Forall u ty, subst')
     uni trace bind1 bind2 t1 (Forall u t2) subst =
       uni trace bind1 bind2 (Forall u t2) t1 subst
     uni trace bind1 bind2 (TypeVar u) t subst =
@@ -147,15 +154,13 @@ unify' t1 t2 env argOrd subst =
 
     uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
-        (TypeVar u, TypeVar u') -> return $ Just (TypeVar u, Map.insert u (TypeVar u') subst)
+        (TypeVar u, TypeVar u') -> return $ Just (TypeVar u', Map.insert u (TypeVar u') subst)
         (TypeVar u, t) -> return $ Just (t, Map.insert u t subst)
         (t, TypeVar u') -> return $ Just (t, Map.insert u' t subst)
         (t, t') -> uni' trace bind1 bind2 t t' subst
     uni' trace bind1 bind2 (Forall u t1) t2 subst = do
       uni' trace bind1 bind2 t1 t2 subst >>= \case
-        Just (ty, subst') -> do
-          subst'' <- generalize u subst'
-          return $ Just (ty, subst'')
+        Just (ty, subst') -> return $ Just (Forall u ty, subst')
         Nothing -> return Nothing
     uni' trace bind1 bind2 t1 (Forall u t2) subst =
       uni' trace bind1 bind2 (Forall u t2) t1 subst
@@ -219,7 +224,7 @@ unify' t1 t2 env argOrd subst =
     uni' trace bind1 bind2 (Arrow tyDom1 tyCod1) (Arrow tyDom2 tyCod2) subst = do
       uni' trace bind1 bind2 tyDom2 tyDom1 subst >>= \case
         Just (tyDom, subst') -> do
-          uni' trace bind1 bind2 tyCod1 tyCod2 subst' >>= \case
+          uni' trace bind1 bind2 tyCod2 tyCod1 subst' >>= \case
             Just (tyCod, subst'') -> return $ Just (Arrow tyDom tyCod, subst'')
             Nothing -> return Nothing
         Nothing -> return Nothing
