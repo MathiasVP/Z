@@ -30,6 +30,8 @@ invert Positive = Negative
 invert Negative = Positive
 invert v = v
 
+maxNumberOfUnrolls = 100
+
 variance :: Env -> ArgOrd -> Type -> String -> Variance
 variance env argOrd t s =
   let var trace v (Name s' tys)
@@ -59,12 +61,17 @@ subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Bool, Substituti
 subtype t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
-
+    
+    updateOrElse f def k map =
+      case Map.lookup k map of
+        Just a -> Map.insert k (f a) map
+        Nothing -> Map.insert k def map
+    
     sub trace bind1 bind2 assum subst (Forall u t1) t2 =
       sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst t1 (Forall u t2) =
       sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
+    sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) = do
       case follow subst t2 of
         TypeVar u -> return (True, Map.insert u t1 subst)
         ty -> sub trace bind1 bind2 assum subst t1 ty
@@ -99,15 +106,15 @@ subtype t1 t2 env argOrd subst =
              f (True, subst) (t1, t2, Negative) = sub trace bind1 bind2 assum subst t2 t1
              f (True, subst) (t1, t2, Bottom) = return (True, subst)
              f (False, subst) _ = return (False, subst)
-    sub trace bind1 bind2 assum subst (Name s tys) ty
-      | Set.member s trace = return (False, subst)
-      | otherwise =
-        sub (Set.insert s trace) bind1' bind2 assum subst (lookup bind1 env s) ty
+    sub trace bind1 bind2 assum subst (Name s tys) ty =
+      case Map.lookup s trace of
+        Just n -> return (n < maxNumberOfUnrolls, subst)
+        Nothing -> sub (updateOrElse (+1) 0 s trace) bind1' bind2 assum subst (lookup bind1 env s) ty
       where bind1' = makeBindings argOrd s tys
-    sub trace bind1 bind2 assum subst ty (Name s tys)
-      | Set.member s trace = return (False, subst)
-      | otherwise =
-        sub (Set.insert s trace) bind1 bind2' assum subst ty (lookup bind2 env s)
+    sub trace bind1 bind2 assum subst ty (Name s tys) =
+      case Map.lookup s trace of
+        Just n -> return (n < maxNumberOfUnrolls, subst)
+        Nothing -> sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum subst ty (lookup bind2 env s)
       where bind2' = makeBindings argOrd s tys
     sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) = do
       (b1121, subst1121) <- sub trace bind1 bind2 assum subst t11 t21
@@ -139,7 +146,7 @@ subtype t1 t2 env argOrd subst =
     sub trace bind1 bind2 assum subst t1 (Tuple [t2]) =
       sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst (Tuple tys1) (Tuple tys2) =
-      if List.length tys1 >= List.length tys2 then
+      if List.length tys1 == List.length tys2 then
         foldM f (True, subst) (List.zip tys1 tys2)
       else return (False, subst)
       where f (True, subst) (t1, t2) = sub trace bind1 bind2 assum subst t1 t2
@@ -167,4 +174,4 @@ subtype t1 t2 env argOrd subst =
     sub trace bind1 bind2 _ subst BoolType BoolType = return (True, subst)
     sub trace bind1 bind2 _ subst StringType StringType = return (True, subst)
     sub trace bind1 bind2 _ _ _ _ = return (False, subst)
-  in sub Set.empty Map.empty Map.empty Map.empty subst t1 t2
+  in sub Map.empty Map.empty Map.empty Map.empty subst t1 t2
