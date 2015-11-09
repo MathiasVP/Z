@@ -153,21 +153,21 @@ subtype t1 t2 env argOrd subst =
             f (False, subst) _ = return (False, subst)
     sub trace bind1 bind2 assum subst (Array t1) (Array t2) =
       sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Record _ fields1) (Record b2 fields2) =
+    sub trace bind1 bind2 assum subst (Record _ fields1) (Record b fields2) =
       foldM f (True, subst) fields1
       where f :: (Bool, Substitution) -> (String, Type) -> IO (Bool, Substitution)
             f (b, subst) (name, ty) =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
-              Nothing -> return (b2, subst)
-    sub trace bind1 bind2 assum subst (Intersect t1 t2) ty =
-      foldM f (True, subst) [t1, t2]
-      where f (True, subst) ty' = sub trace bind1 bind2 assum subst ty' ty
-            f (False, subst) _ = return (False, subst)
-    sub trace bind1 bind2 assum subst ty (Intersect t1 t2) =
-      foldM f (True, subst) [t1, t2]
-      where f (True, subst) ty' = sub trace bind1 bind2 assum subst ty ty'
-            f (False, subst) _ = return (False, subst)
+              Nothing -> return (b, subst)
+    sub trace bind1 bind2 assum subst (Intersect t1 t2) ty = do
+      (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty
+      return (b1 && b2, subst'')
+    sub trace bind1 bind2 assum subst ty (Intersect t1 t2) = do
+      (b1, subst') <- sub trace bind1 bind2 assum subst ty t1
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
+      return (b1 || b2, subst'')
     sub trace bind1 bind2 _ subst IntType IntType = return (True, subst)
     sub trace bind1 bind2 _ subst IntType RealType = return (True, subst)
     sub trace bind1 bind2 _ subst RealType RealType = return (True, subst)

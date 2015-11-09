@@ -1,6 +1,7 @@
 module TypeUtils where
 import qualified Data.Unique as U
 import Data.Map (Map)
+import Data.Unique
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
@@ -69,9 +70,23 @@ mkTypeVar = U.newUnique >>=
 makeArrow :: [Type] -> Type -> Type
 makeArrow types retTy = List.foldr Arrow retTy types
 
+typevars :: Type -> [Unique]
+typevars (TypeVar u) = [u]
+typevars (Forall u ty) =
+  if List.elem u uniques then uniques
+  else u : uniques
+  where uniques = typevars ty
+typevars (Arrow t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars (Union t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars (Tuple tys) = List.nub $ concatMap typevars tys
+typevars (Record _ fields) = List.nub $ concatMap typevars (List.map snd fields)
+typevars (Array ty) = typevars ty
+typevars (Intersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars _ = []
+
 makeForall :: Substitution -> Type -> Type -> Type
-makeForall subst (TypeVar u) ty =
-  case follow subst (TypeVar u) of
-    TypeVar _ -> Forall u ty
-    _         -> ty
-makeForall _ _ ty = ty
+makeForall subst ty1 ty2 =
+  List.foldr make ty2 (typevars (follow subst ty1))
+  where make u ty
+          | List.elem u (typevars ty) = ty
+          | otherwise                 = Forall u ty
