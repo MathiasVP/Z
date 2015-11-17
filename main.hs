@@ -1,5 +1,7 @@
 import Parser as P
 import TypeInfer as T
+import MatchCheck as MC
+import Control.Monad.Trans.Writer.Lazy
 
 main :: IO ()
 main = let path = "../test.z"
@@ -9,5 +11,6 @@ main = let path = "../test.z"
                Right ast -> do
                  (typed, env, subst) <- T.infer ast
                  print env
-                 putStrLn ""
-                 print subst
+                 let (b, s) = runWriter (MC.matchCheck typed)
+                 print b
+                 putStrLn s

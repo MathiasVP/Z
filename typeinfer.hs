@@ -2,11 +2,11 @@
 module TypeInfer where
 import Control.Monad
 import Control.Monad.State.Lazy
-import Data.Ord
 import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Maybe as Maybe
+import Data.Bool
 import Data.Unique
 import Data.Set (Set)
 import Data.Map (Map)
@@ -28,13 +28,6 @@ extendRecord name ty (TypeVar u) subst =
                 | name' == name = (name', ty)
                 | otherwise     = (name', ty')
     TypeVar u' -> Map.insert u' (Record True [(name, ty)]) subst
-
-normaliseFields :: Ord a => [(a, b)] -> [(a, b)]
-normaliseFields = List.sortBy (comparing fst)
-
-equalRecordFields fields1 fields2 =
-  let f fields = List.map fst (normaliseFields fields)
-  in f fields1 == f fields2
 
 mergeSubstitution :: Env -> ArgOrd -> Substitution -> Substitution -> IO Substitution
 mergeSubstitution env argOrd subst1 subst2 = foldlWithKeyM f subst1 subst2
@@ -59,15 +52,6 @@ infer decls = do
   (typeddecls, env, _, subst) <- inferList inferDecl Map.empty Map.empty Map.empty decls
   return (List.map (replaceDecl subst) typeddecls, Map.map (replaceType subst) env, subst)
   where
-    inferList :: (a -> Env -> ArgOrd -> Substitution -> IO (b, Env, ArgOrd, Substitution)) ->
-                  Env -> ArgOrd -> Substitution -> [a] -> IO ([b], Env, ArgOrd, Substitution)
-    inferList inferer env argOrd subst list =
-      do (list', env', argOrd', subst') <- foldM f ([], env, argOrd, subst) list
-         return (List.reverse list', env', argOrd', subst')
-      where f (list', env, argOrd, subst) elem = do
-            (elem', env', argOrd', subst') <- inferer elem env argOrd subst
-            return (elem' : list', env', argOrd', subst')
-
     extendArgOrd :: String -> [String] -> ArgOrd -> ArgOrd
     extendArgOrd name targs = Map.insert name (Map.fromList (List.zip [0..] targs))
 
@@ -249,16 +233,26 @@ infer decls = do
     -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst
-      t <- mkTypeVar
-      (_, subst') <- unify (typeOf e') t envExpr argOrd' substExpr
-      (mes', _, _, subst'') <- inferList (f t) envExpr argOrd' subst' mes
+      let strategy = bool unifyStrict unifyPermissive (free (typeOf e') subst)
+      (mes', _, _, subst'') <- inferList (strategy (typeOf e')) envExpr argOrd' substExpr mes
       return (TMatchStatement e' mes', env, argOrd, subst'')
-      where f (TypeVar u) (me, s) env argOrd subst = do
+      where unifyPermissive (TypeVar u) (me, s) env argOrd subst = do
               (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst
               (ty, subst') <- unify (TypeVar u) (typeOf me') env argOrd subst'
               let subst'' = Map.insert u ty subst'
               (s', _, _, subst''') <- inferStatement s env' argOrd' subst''
               return ((me', s'), env, argOrd, subst''')
+
+            unifyStrict ty (me, s) env argOrd subst = do
+              (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst
+              unify' ty (typeOf me') env' argOrd' subst' >>= \case
+                Just (_, subst'') -> do
+                  (s', _, _, subst''') <- inferStatement s env' argOrd' subst''
+                  return ((me', s'), env, argOrd', subst''')
+                Nothing -> do putStrLn $ "Cannot unify type '" ++ show ty ++
+                                         "' with type '" ++ show (typeOf me') ++ "'."
+                              (s', _, _, _) <- inferStatement s env' argOrd' subst'
+                              return ((me', s'), env, argOrd, subst)
 
     inferStatement (ReturnStatement e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst

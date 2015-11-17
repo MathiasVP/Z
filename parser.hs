@@ -409,10 +409,12 @@ literalExpr = try ((return RealExpr) <*> real)
 
 integer :: IParser Int
 integer = do
-    n <- read <$> number
+    n <- rd <$> (minus <|> number)
     spaces'
     return n
-  where number = many1 digit
+  where rd     = read :: String -> Int
+        minus  = (:) <$> char '-' <*> number
+        number = many1 digit
 
 real :: IParser Double
 real = do

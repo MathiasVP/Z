@@ -2,6 +2,8 @@ module TypeUtils where
 import qualified Data.Unique as U
 import Data.Map (Map)
 import Data.Unique
+import Control.Monad
+import Data.Ord
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
@@ -14,6 +16,22 @@ type Bindings = Map String Type
 
 exprOf = fst
 typeOf = snd
+
+normaliseFields :: Ord a => [(a, b)] -> [(a, b)]
+normaliseFields = List.sortBy (comparing fst)
+
+equalRecordFields fields1 fields2 =
+  let f fields = List.map fst (normaliseFields fields)
+  in f fields1 == f fields2
+
+inferList :: (a -> Env -> ArgOrd -> Substitution -> IO (b, Env, ArgOrd, Substitution)) ->
+              Env -> ArgOrd -> Substitution -> [a] -> IO ([b], Env, ArgOrd, Substitution)
+inferList inferer env argOrd subst list =
+  do (list', env', argOrd', subst') <- foldM f ([], env, argOrd, subst) list
+     return (List.reverse list', env', argOrd', subst')
+  where f (list', env, argOrd, subst) elem = do
+        (elem', env', argOrd', subst') <- inferer elem env argOrd subst
+        return (elem' : list', env', argOrd', subst')
 
 follow :: Substitution -> Type -> Type
 follow subst = fol Set.empty
@@ -37,6 +55,12 @@ follow subst = fol Set.empty
     fol visited (Intersect t1 t2) = Intersect (fol visited t1) (fol visited t2)
     fol _ t = t
 
+free :: Type -> Substitution -> Bool
+free ty subst =
+  case follow subst ty of
+    TypeVar _ -> True
+    _         -> False
+    
 makeBindings :: ArgOrd -> String -> [Type] -> Bindings
 makeBindings argOrd s types =
   case Map.lookup s argOrd of

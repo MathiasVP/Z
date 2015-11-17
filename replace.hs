@@ -68,8 +68,6 @@ replaceMatchExpr subst (tme, ty) =
         (TTupleMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
       replace (TListMatchExpr tmes, ty) =
         (TListMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
-      replace (TSetMatchExpr tmes, ty) =
-        (TSetMatchExpr (List.map (replaceMatchExpr subst) tmes), ty')
       replace (TRecordMatchExpr fields, ty) =
         (TRecordMatchExpr (List.map f fields), ty')
         where f (s, tme) = (s, replaceMatchExpr subst tme)
@@ -141,8 +139,6 @@ replaceExpr subst (te, ty) =
         (TListExpr (List.map replace tes), ty')
       replace (TTupleExpr tes, ty) =
         (TTupleExpr (List.map replace tes), ty')
-      replace (TSetExpr tes, ty) =
-        (TSetExpr (List.map replace tes), ty')
       replace (TRecordExpr fields, ty) =
         (TRecordExpr (List.map f fields), ty')
         where f (s, te) = (s, replace te)

@@ -26,7 +26,6 @@ data TExpr = TIntExpr Int
            | TCallExpr TypedExpr TypedExpr
            | TListExpr [TypedExpr]
            | TTupleExpr [TypedExpr]
-           | TSetExpr [TypedExpr]
            | TRecordExpr [(String, TypedExpr)]
            | TLValue TypedLValueExpr
            | TLambdaExpr [TypedMatchExpr] TypedStatement
@@ -36,13 +35,12 @@ type TypedExpr = (TExpr, Type)
 
 data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
                 | TListMatchExpr [TypedMatchExpr]
-                | TSetMatchExpr [TypedMatchExpr]
                 | TRecordMatchExpr [(String, TypedMatchExpr)]
                 | TVarMatch String
                 | TIntMatchExpr Int
                 | TStringMatchExpr String
                 | TBoolMatchExpr Bool
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 type TypedMatchExpr = (TMatchExpr, Type)
 
