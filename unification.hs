@@ -152,7 +152,7 @@ unify' t1 t2 env argOrd subst =
   let
     lookup bind env s = Map.findWithDefault (bind ! s) s env
 
-    uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
+    uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst = do
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') -> return $ Just (TypeVar u', Map.insert u (TypeVar u') subst)
         (TypeVar u, t) -> return $ Just (t, Map.insert u t subst)
@@ -167,10 +167,10 @@ unify' t1 t2 env argOrd subst =
     uni' trace bind1 bind2 (TypeVar u) t subst =
       case follow subst (TypeVar u) of
         TypeVar u -> return $ Just (t, Map.insert u t subst)
-        t'        ->
-          uni' trace bind1 bind2 t' t subst >>= \case
-            Just (t'', subst') -> return $ Just (t'', Map.insert u t'' subst')
-            Nothing            -> return Nothing
+        t' -> uni' trace bind1 bind2 t' t subst >>= \case
+                Just (t'', subst') ->
+                  return $ Just (t'', Map.insert u t'' subst')
+                Nothing -> return Nothing
     uni' trace bind1 bind2 t (TypeVar u) subst =
       uni' trace bind1 bind2 (TypeVar u) t subst
     uni' trace bind1 bind2 t1@(Name s1 types1) t2@(Name s2 types2) subst
@@ -245,10 +245,12 @@ unify' t1 t2 env argOrd subst =
             (Just (t1221, subst1221), _) -> return $ Just (union t1122 t1221, subst1221)
             (_, Just (t1222, subst1222)) -> return $ Just (union t1122 t1222, subst1222)
         (_, _) -> return Nothing
-    uni' trace bind1 bind2 ty (Union t1 t2) subst = do
+    uni' trace bind1 bind2 ty (Union t1 t2) subst =
       uni' trace bind1 bind2 ty t1 subst >>= \case
-        Just (t, subst') -> return $ Just (t, subst')
-        Nothing -> uni' trace bind1 bind2 ty t2 subst
+        Just (t, subst') -> return $ Just (Union t t2, subst')
+        Nothing -> uni' trace bind1 bind2 ty t2 subst >>= \case
+                     Just (t, subst') -> return $ Just (Union t1 t, subst')
+                     Nothing          -> return Nothing
     uni' trace bind1 bind2 (Union t1 t2) ty subst =
       uni' trace bind1 bind2 ty (Union t1 t2) subst
     -- TODO: This shouldn't intersect using equality. Use unification instead

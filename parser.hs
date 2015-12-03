@@ -465,7 +465,7 @@ recordExpr :: IParser Expr
 recordExpr = do
   char '{'
   spaces'
-  exprs <- sepBy1 recFieldAssign (spaces' >> char ',' >> spaces')
+  exprs <- sepBy recFieldAssign (spaces' >> char ',' >> spaces')
   spaces'
   char '}'
   spaces'
@@ -560,7 +560,7 @@ recordMatchExpr = matchRecordExpr
   where
     matchRecordExpr = do
         char '{'
-        exprs <- sepBy1 recFieldAssign (spaces' >> char ',' >> spaces')
+        exprs <- sepBy recFieldAssign (spaces' >> char ',' >> spaces')
         char '}'
         spaces'
         return $ RecordMatchExpr exprs

@@ -122,7 +122,7 @@ infer decls = do
     inferMatchExpr tm (RecordMatchExpr fields) env argOrd subst = do
       let uni' env argOrd subst t1 t2 = unify' t1 t2 env argOrd subst
       (fields', env', argOrd', subst') <- do
-        fields' <- forever mkTypeVar >>=
+        fields' <- replicateM (List.length fields) mkTypeVar >>=
                      return . List.zip (normaliseFields fields)
         let record = Record False (List.map (\((s, _), ty) -> (s, ty)) fields')
         commMaybeIO (liftM (uni' env argOrd subst record) tm) >>= \case
@@ -230,7 +230,6 @@ infer decls = do
                                          env' argOrd' substExpr
       return (TAssignStatement (Right lve') e', env'', argOrd', substLValueExpr)
 
-    -- TODO: Implement pattern matching type checking.
     inferStatement (MatchStatement e mes) env argOrd subst = do
       (e', envExpr, argOrd', substExpr) <- inferExpr e env argOrd subst
       let strategy = bool unifyStrict unifyPermissive (free (typeOf e') subst)
@@ -245,14 +244,14 @@ infer decls = do
 
             unifyStrict ty (me, s) env argOrd subst = do
               (me', env', argOrd', subst') <- inferMatchExpr Nothing me env argOrd subst
-              unify' ty (typeOf me') env' argOrd' subst' >>= \case
-                Just (_, subst'') -> do
+              subtype (typeOf me') ty env' argOrd' subst' >>= \case
+                (True, subst'') -> do
                   (s', _, _, subst''') <- inferStatement s env' argOrd' subst''
                   return ((me', s'), env, argOrd', subst''')
-                Nothing -> do putStrLn $ "Cannot unify type '" ++ show ty ++
-                                         "' with type '" ++ show (typeOf me') ++ "'."
-                              (s', _, _, _) <- inferStatement s env' argOrd' subst'
-                              return ((me', s'), env, argOrd, subst)
+                (False, _) -> do putStrLn $ "Cannot unify type '" ++ show ty ++
+                                            "' with type '" ++ show (typeOf me') ++ "'."
+                                 (s', _, _, _) <- inferStatement s env' argOrd' subst'
+                                 return ((me', s'), env, argOrd, subst)
 
     inferStatement (ReturnStatement e) env argOrd subst = do
       (e', env', argOrd', subst') <- inferExpr e env argOrd subst

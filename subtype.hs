@@ -71,7 +71,7 @@ subtype t1 t2 env argOrd subst =
       sub trace bind1 bind2 assum subst t1 t2
     sub trace bind1 bind2 assum subst t1 (Forall u t2) =
       sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) = do
+    sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of
         TypeVar u -> return (True, Map.insert u t1 subst)
         ty -> sub trace bind1 bind2 assum subst t1 ty
@@ -159,7 +159,7 @@ subtype t1 t2 env argOrd subst =
             f (b, subst) (name, ty) =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
-              Nothing -> return (b, subst)
+              Nothing -> return (False, subst)
     sub trace bind1 bind2 assum subst (Intersect t1 t2) ty = do
       (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
       (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty
