@@ -12,10 +12,17 @@ import Data.Set(Set)
 import Data.Map(Map, (!))
 import Data.Maybe
 import Data.Tuple
+import Data.Ord
 import Control.Monad.Loops
 import Control.Monad.Writer.Lazy
 import qualified Debug.Trace as Debug
 
+data CoveringResult
+  = Covered
+  | Nonexhaustive Pattern
+  | Redundant TypedMatchExpr
+  deriving Show
+  
 matchCheck :: [TypedDecl] -> Writer String Bool
 matchCheck = allM check
 
@@ -28,24 +35,6 @@ and :: Monad m => m Bool -> m Bool -> m Bool
 and = liftM2 (&&)
 
 ands = List.foldr and (return True)
-
-format pp mexprs = List.intercalate ", " (List.map pp mexprs)
-
-ppMatchExpr :: TypedMatchExpr -> String
-ppMatchExpr (TTupleMatchExpr mexprs, _) = "(" ++ format ppMatchExpr mexprs ++ ")"
-ppMatchExpr (TListMatchExpr mexprs, _) = "[" ++ format ppMatchExpr mexprs ++ "]"
-ppMatchExpr (TRecordMatchExpr fields, _) = "{" ++ format ppField fields ++ "}"
-  where ppField (name, mexpr) = name ++ " = " ++ ppMatchExpr mexpr
-ppMatchExpr (TVarMatch s, ty) = s ++ ":" ++ show ty
-ppMatchExpr (TIntMatchExpr n, ty) = show n ++ ":" ++ show ty
-ppMatchExpr (TStringMatchExpr s, ty) = s ++ ":" ++ show ty
-ppMatchExpr (TBoolMatchExpr b, ty) = show b ++ ":" ++ show ty
-
-formatMatches :: Int -> [TypedMatchExpr] -> String
-formatMatches _ [] = ""
-formatMatches n (mexpr:tl)
-  | n > 0 = "\t" ++ ppMatchExpr mexpr ++ " => ...\n" ++ formatMatches (n-1) tl
-  | otherwise = "\t..."
 
 checkStmt :: TypedStatement -> Writer String Bool
 checkStmt (TIfStatement expr stmtThen Nothing) =
@@ -63,7 +52,6 @@ checkStmt (TAssignStatement (Left mexpr) expr) =
 checkStmt (TAssignStatement (Right lvexpr) expr) =
   ands [checkLvalExpr lvexpr, checkExpr expr]
 checkStmt (TMatchStatement (expr, ty) actions) = do
-  --List.map fst actions
   tell (show (covering (ideal ty) (List.map fst actions)) ++ "\n")
   return True
 checkStmt (TReturnStatement expr) = checkExpr expr
@@ -199,6 +187,8 @@ refine (RecordPattern fields1) (RecordPattern fields2) =
             Just p' -> ((s, refine p p'):include, exclude)
             Nothing -> (include, (s, p):exclude)
         map2 = Map.fromList fields2
+-- TODO: Not structurally recursive since the innermost refine call
+--       might create a larger value. This means infinite looping :(
 refine (DifferencePattern p1 p2) (TopPattern ty) = refine (refine p1 (TopPattern ty)) p2
 refine p1 p2 = DifferencePattern p1 p2
 
@@ -213,8 +203,33 @@ create (TStringMatchExpr s, _) = StringPattern s
 create (TBoolMatchExpr b, _) = BoolPattern b
 
 instanceOf :: Pattern -> Pattern -> Bool
-instanceOf _ (BottomPattern _) = False
-instanceOf _ (TopPattern _) = True
+instanceOf _ (BottomPattern _) = False --Is Bottom an instance of Bottom if they have the same type?
+instanceOf (TopPattern ty1) (TopPattern ty2)
+  | ty1 == ty2 = True
+  | otherwise  = False
+instanceOf (TopPattern (Array ty)) (ArrayPattern ps) =
+  List.all (instanceOf (TopPattern ty)) ps
+instanceOf (TopPattern (Tuple tys)) (TuplePattern ps)
+  | List.length tys == List.length ps =
+    List.all (uncurry instanceOf) (List.zip (List.map TopPattern tys) ps)
+instanceOf (TopPattern (Record _ fieldst)) (RecordPattern fieldsp)
+  | List.map fst mapt == List.map fst mapp =
+    List.all (uncurry instanceOf) (List.zip (List.map snd mapt) (List.map snd mapp))
+  where mapt = sort (List.map (\(s, ty) -> (s, TopPattern ty)) fieldst)
+        mapp = sort fieldsp
+        sort = List.sortBy (comparing fst)
+instanceOf (IntPattern _) (TopPattern IntType) = True
+instanceOf (StringPattern _) (TopPattern StringType) = True
+instanceOf (BoolPattern _) (TopPattern BoolType) = True
+instanceOf (ArrayPattern ps) (TopPattern (Array ty)) =
+  List.all (flip instanceOf (TopPattern ty)) ps
+instanceOf (TuplePattern ps) (TopPattern (Tuple tys))
+  | List.length ps == List.length tys =
+    List.all (uncurry instanceOf) (List.zip ps (List.map TopPattern tys))
+instanceOf (RecordPattern fieldsp) (TopPattern (Record _ fieldst)) =
+  Map.isSubmapOfBy instanceOf mapt mapp
+  where mapp = Map.fromList fieldsp
+        mapt = Map.fromList (List.map (\(s, ty) -> (s, TopPattern ty)) fieldst)
 instanceOf (IntPattern n1) (IntPattern n2)
   | n1 == n2 = True
   | otherwise = False
@@ -247,14 +262,11 @@ instanceOf p1 (UnionPattern p2 p3)
   | otherwise        = False
 instanceOf p1 p2 = False
 
-covering :: Pattern -> [TypedMatchExpr] -> Bool
+covering :: Pattern -> [TypedMatchExpr] -> CoveringResult
 covering p []
-  | isBottom p = error "Covered"
-  | otherwise  = error ("Not covered. Terminal pattern is " ++ show p)
+  | isBottom p = Covered
+  | otherwise  = Nonexhaustive p
 covering p (mexpr:mexprs)
-  | instanceOf q p = Debug.trace ("instanceOf (" ++ show q ++ ") (" ++ show p ++ ") = True and " ++
-                                  "refine (" ++ show p ++ ") (" ++ show q ++ ") = " ++
-                                  show (refine p q) ++ "\n")
-                                 (covering (refine p q) mexprs)
-  | otherwise      = error ("Overlapping. (" ++ show q ++ ") is not an instance of (" ++ show p ++ ")")
+  | instanceOf q p = covering (refine p q) mexprs
+  | otherwise      = Redundant mexpr
   where q = create mexpr
