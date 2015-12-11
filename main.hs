@@ -2,6 +2,7 @@ import Parser as P
 import TypeInfer as T
 import MatchCheck as MC
 import Control.Monad.Trans.Writer.Lazy
+import qualified Data.List as List
 
 main :: IO ()
 main = let path = "../test.z"
@@ -10,7 +11,8 @@ main = let path = "../test.z"
                Left err -> print err
                Right ast -> do
                  (typed, env, subst) <- T.infer ast
-                 print env
-                 let (b, s) = runWriter (MC.matchCheck typed)
-                 print b
-                 putStrLn s
+                 let (b, badMatches) = runWriter (MC.matchCheck typed)
+                 mapM putStrLn (List.map MC.formatMatchWarning badMatches)
+                 case b of
+                  True -> return () --Continue compilation
+                  False -> return () --Abort compilation

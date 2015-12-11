@@ -1,5 +1,6 @@
 module TypedAst(module TypedAst, module Ast) where
 import Ast
+import qualified Data.List as List
 
 data TypedDecl = TTypeDecl String [String] Type
                | TFunDecl String [String] [TypedMatchExpr] Type TypedStatement
@@ -43,6 +44,19 @@ data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
   deriving (Show, Eq, Ord)
 
 type TypedMatchExpr = (TMatchExpr, Type)
+
+ppTypedMatchExpr :: TypedMatchExpr -> String
+ppTypedMatchExpr (TTupleMatchExpr tmexprs, _) =
+  "(" ++ List.intercalate ", " (List.map ppTypedMatchExpr tmexprs) ++ ")"
+ppTypedMatchExpr (TListMatchExpr tmexprs, _) =
+  "[" ++ List.intercalate ", " (List.map ppTypedMatchExpr tmexprs) ++ "]"
+ppTypedMatchExpr (TRecordMatchExpr tmexprs, _) =
+  "{" ++ List.intercalate ", " (List.map f tmexprs) ++ "}"
+  where f (s, tmexpr) = "s : " ++ ppTypedMatchExpr tmexpr
+ppTypedMatchExpr (TVarMatch s, ty) = s ++ " : " ++ show ty
+ppTypedMatchExpr (TIntMatchExpr n, _) = show n
+ppTypedMatchExpr (TStringMatchExpr s, _) = "\"" ++ s ++ "\""
+ppTypedMatchExpr (TBoolMatchExpr b, _) = show b
 
 data TLValueExpr = TVarExpr String
                  | TFieldAccessExpr TypedLValueExpr String
