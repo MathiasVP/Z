@@ -1,4 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 module MatchCheck where
 
 import Prelude hiding (and)
@@ -34,6 +36,7 @@ data Pattern = BottomPattern Type --Match nothing of given type
              | RecordPattern [(String, Pattern)]
              | UnionPattern Pattern Pattern
              | DifferencePattern Pattern Pattern
+  deriving Eq
 
 instance Show Pattern where
   show (BottomPattern _) = "_"
@@ -45,11 +48,13 @@ instance Show Pattern where
   show (TuplePattern ps) = "(" ++ List.intercalate ", " (List.map show ps) ++ ")"
   show (RecordPattern ps) = "{" ++ List.intercalate ", " (List.map f ps) ++ "}"
     where f (s, p) = s ++ " = " ++ show p
+  show (UnionPattern p@(DifferencePattern p1 p2) p3) = "(" ++ show p ++ ") | " ++ show p3
+  show (UnionPattern p1 p@(DifferencePattern p2 p3)) = show p1 ++ " | (" ++ show p ++ ")"
   show (UnionPattern p1 p2) = show p1 ++ " | " ++ show p2
-  show (DifferencePattern p@(UnionPattern p1 p2) p3) = "(" ++ show p ++ ")" ++ " - " ++ show p2
+  show (DifferencePattern p@(UnionPattern p1 p2) p3) = "(" ++ show p ++ ")" ++ " - " ++ show p3
   show (DifferencePattern p1 p@(UnionPattern p2 p3)) = show p1 ++ " - (" ++ show p ++ ")"
   show (DifferencePattern p1 p2) = show p1 ++ " - " ++ show p2
-  
+
 formatMatchWarning :: CoveringResult -> String
 formatMatchWarning Covered = ""
 formatMatchWarning (Nonexhaustive p) =
@@ -159,18 +164,89 @@ ideal (Array ty) = TopPattern (Array ty)
 ideal (Tuple tys) = TuplePattern (List.map ideal tys)
 ideal (Record _ fields) = RecordPattern (List.map (\(s, ty) -> (s, ideal ty)) fields)
 ideal (Forall _ ty) = error "NYI"
-ideal (Union ty1 ty2) = UnionPattern p1 p2
+ideal (Union ty1 ty2) = unionPattern p1 p2
   where p1 = ideal ty1
         p2 = ideal ty2
 ideal (Intersect ty1 ty2) = error "NYI"
+
+unionPattern :: Pattern -> Pattern -> Pattern
+unionPattern (BottomPattern IntType) p@(IntPattern n) = p
+unionPattern (BottomPattern StringType) p@(StringPattern s) = p
+unionPattern (BottomPattern BoolType) p@(BoolPattern b) = p
+unionPattern (BottomPattern (Array ty)) p@(ArrayPattern ps) =
+  ArrayPattern (List.map (unionPattern (BottomPattern ty)) ps)
+unionPattern (BottomPattern (Tuple tys)) p@(TuplePattern ps)
+  | List.length tys == List.length ps =
+    TuplePattern (List.zipWith unionPattern (List.map BottomPattern tys) ps)
+unionPattern (BottomPattern (Record _ fieldst)) (RecordPattern fieldsp)
+  | subdomain mapt mapp =
+    RecordPattern (List.map unionIfPresent fieldsp)
+  where subdomain = Map.isSubmapOfBy (const (const True))
+        mapt = Map.fromList fieldst
+        mapp = Map.fromList fieldsp
+        
+        unionIfPresent (s, p) =
+          case Map.lookup s mapt of
+            Just t -> (s, unionPattern (BottomPattern t) p)
+            Nothing -> (s, p)
+unionPattern (BottomPattern ty1) p@(TopPattern ty2)
+  | ty1 == ty2 = p
+unionPattern (IntPattern n) p@(TopPattern IntType) = p
+unionPattern (StringPattern s) p@(TopPattern StringType) = p
+unionPattern (BoolPattern b) p@(TopPattern BoolType) = p
+unionPattern (ArrayPattern ps) p@(TopPattern (Array ty))
+  | List.all (isTop . unionPattern (TopPattern ty)) ps = p
+unionPattern (TuplePattern ps) p@(TopPattern (Tuple tys))
+  | List.length tys == List.length ps &&
+    List.all isTop (List.zipWith unionPattern (List.map TopPattern tys) ps) = p
+unionPattern (RecordPattern fieldsp) p@(TopPattern (Record _ fieldst))
+  | subdomain mapt mapp &&
+    List.all isTop (List.map (snd . unionIfPresent) fieldsp) = p
+  where subdomain = Map.isSubmapOfBy (const (const True))
+        mapt = Map.fromList fieldst
+        mapp = Map.fromList fieldsp
+        
+        unionIfPresent (s, p) =
+          case Map.lookup s mapt of
+            Just t -> (s, unionPattern (TopPattern t) p)
+            Nothing -> (s, p)
+unionPattern p@(IntPattern n1) (IntPattern n2)
+  | n1 == n2 = p
+unionPattern p@(StringPattern s1) (StringPattern s2)
+  | s1 == s2 = p
+unionPattern p@(BoolPattern b1) (BoolPattern b2)
+  | b1 == b2 = p
+unionPattern (ArrayPattern ps1) (ArrayPattern ps2)
+  | List.length ps1 == List.length ps2 =
+    ArrayPattern (List.zipWith unionPattern ps1 ps2)
+unionPattern (TuplePattern ps1) (TuplePattern ps2)
+  | List.length ps1 == List.length ps2 =
+    TuplePattern (List.zipWith unionPattern ps1 ps2)
+unionPattern (RecordPattern fields1) (RecordPattern fields2)
+  | Map.keysSet map1 == Map.keysSet map2 =
+    RecordPattern (Map.toList $ Map.unionWith unionPattern map1 map2)
+  where map1 = Map.fromList fields1
+        map2 = Map.fromList fields2
+unionPattern (UnionPattern p1 p2) (UnionPattern p3 p4) =
+  UnionPattern (UnionPattern (UnionPattern p1 p2) p3) p4
+unionPattern p1 (UnionPattern p2 p3) = UnionPattern (UnionPattern p1 p2) p3
+unionPattern p1 p2 = UnionPattern p1 p2
 
 isBottom :: Pattern -> Bool
 isBottom (BottomPattern _) = True
 isBottom (ArrayPattern ps) = List.all isBottom ps
 isBottom (TuplePattern ps) = List.all isBottom ps
 isBottom (UnionPattern p1 p2) = isBottom p1 && isBottom p2
-isBottom (DifferencePattern p1 p2) = instanceOf p1 p2
+isBottom (DifferencePattern p1 p2) = instanceOf List.all p1 p2
 isBottom _ = False
+
+isTop :: Pattern -> Bool
+isTop (TopPattern _) = True
+isTop (ArrayPattern ps) = List.all isTop ps
+isTop (TuplePattern ps) = List.all isTop ps
+isTop (UnionPattern p1 p2) = isTop p1 && isTop p2
+isTop (DifferencePattern p1 p2) = instanceOf List.all p1 p2
+isTop _ = False
 
 refine :: Pattern -> Pattern -> Pattern
 refine p q = ref p q
@@ -220,7 +296,7 @@ refine p q = ref p q
             map2 = Map.fromList fields2
     ref (DifferencePattern p1 p2) p3 =
       case ref p1 p3 of
-        DifferencePattern q1 q2 -> DifferencePattern q1 (UnionPattern p2 q2)
+        DifferencePattern q1 q2 -> DifferencePattern q1 (unionPattern p2 q2)
         q -> ref q p2
     ref p1 p2 = DifferencePattern p1 p2
 
@@ -234,84 +310,88 @@ create (TIntMatchExpr n, _) = IntPattern n
 create (TStringMatchExpr s, _) = StringPattern s
 create (TBoolMatchExpr b, _) = BoolPattern b
 
-instanceOf :: Pattern -> Pattern -> Bool
-instanceOf _ (BottomPattern _) = False
-instanceOf (BottomPattern IntType) (IntPattern _) = True
-instanceOf (BottomPattern StringType) (StringPattern _) = True
-instanceOf (BottomPattern BoolType) (BoolPattern _) = True
-instanceOf (BottomPattern (Array ty)) (ArrayPattern ps) =
-  List.all (instanceOf (BottomPattern ty)) ps
-instanceOf (BottomPattern (Tuple tys)) (TuplePattern ps)
+{- pred = List.all => [p1, p2, ..., pN] is an instance of [q1, q2, ..., qN] iff
+                      for all i. pi is an instance of qi
+   pred = List.any => [p1, p2, ..., pN] is an instance of [q1, q2, ..., qN] iff
+                      for some i. pi is an instance of qi -}
+instanceOf :: (forall a . (a -> Bool) -> [a] -> Bool) -> Pattern -> Pattern -> Bool
+instanceOf pred _ (BottomPattern _) = False
+instanceOf pred (BottomPattern IntType) (IntPattern _) = True
+instanceOf pred (BottomPattern StringType) (StringPattern _) = True
+instanceOf pred (BottomPattern BoolType) (BoolPattern _) = True
+instanceOf pred (BottomPattern (Array ty)) (ArrayPattern ps) =
+  List.all (instanceOf pred (BottomPattern ty)) ps
+instanceOf pred (BottomPattern (Tuple tys)) (TuplePattern ps)
   | List.length tys == List.length ps =
-    List.all (uncurry instanceOf) (List.zip (List.map BottomPattern tys) ps)
-instanceOf (BottomPattern (Record _ fieldst)) (RecordPattern fieldsp) =
-  Map.isSubmapOfBy instanceOf mapt mapp
+    List.all (uncurry (instanceOf pred)) (List.zip (List.map BottomPattern tys) ps)
+instanceOf pred (BottomPattern (Record _ fieldst)) (RecordPattern fieldsp) =
+  Map.isSubmapOfBy (instanceOf pred) mapt mapp
   where mapp = Map.fromList fieldsp
         mapt = Map.fromList (List.map (\(s, ty) -> (s, BottomPattern ty)) fieldst)
-instanceOf (TopPattern ty1) (TopPattern ty2)
+instanceOf pred (TopPattern ty1) (TopPattern ty2)
   | ty1 == ty2 = True
   | otherwise  = False
-instanceOf (TopPattern (Array ty)) (ArrayPattern ps) =
-  List.all (instanceOf (TopPattern ty)) ps
-instanceOf (TopPattern (Tuple tys)) (TuplePattern ps)
+instanceOf pred (TopPattern (Array ty)) (ArrayPattern ps) =
+  List.all (instanceOf pred (TopPattern ty)) ps
+instanceOf pred (TopPattern (Tuple tys)) (TuplePattern ps)
   | List.length tys == List.length ps =
-    List.all (uncurry instanceOf) (List.zip (List.map TopPattern tys) ps)
-instanceOf (TopPattern (Record _ fieldst)) (RecordPattern fieldsp)
+    List.all (uncurry (instanceOf pred)) (List.zip (List.map TopPattern tys) ps)
+instanceOf pred (TopPattern (Record _ fieldst)) (RecordPattern fieldsp)
   | List.map fst mapt == List.map fst mapp =
-    List.all (uncurry instanceOf) (List.zip (List.map snd mapt) (List.map snd mapp))
+    List.all (uncurry (instanceOf pred)) (List.zip (List.map snd mapt) (List.map snd mapp))
   where mapt = sort (List.map (\(s, ty) -> (s, TopPattern ty)) fieldst)
         mapp = sort fieldsp
         sort = List.sortBy (comparing fst)
-instanceOf (IntPattern _) (TopPattern IntType) = True
-instanceOf (StringPattern _) (TopPattern StringType) = True
-instanceOf (BoolPattern _) (TopPattern BoolType) = True
-instanceOf (ArrayPattern ps) (TopPattern (Array ty)) =
-  List.all (flip instanceOf (TopPattern ty)) ps
-instanceOf (TuplePattern ps) (TopPattern (Tuple tys))
+instanceOf pred (IntPattern _) (TopPattern IntType) = True
+instanceOf pred (StringPattern _) (TopPattern StringType) = True
+instanceOf pred (BoolPattern _) (TopPattern BoolType) = True
+instanceOf pred (ArrayPattern ps) (TopPattern (Array ty)) =
+  List.all (flip (instanceOf pred) (TopPattern ty)) ps
+instanceOf pred (TuplePattern ps) (TopPattern (Tuple tys))
   | List.length ps == List.length tys =
-    List.all (uncurry instanceOf) (List.zip ps (List.map TopPattern tys))
-instanceOf (RecordPattern fieldsp) (TopPattern (Record _ fieldst)) =
-  Map.isSubmapOfBy instanceOf mapt mapp
+    List.all (uncurry (instanceOf pred)) (List.zip ps (List.map TopPattern tys))
+instanceOf pred (RecordPattern fieldsp) (TopPattern (Record _ fieldst)) =
+  Map.isSubmapOfBy (instanceOf pred) mapt mapp
   where mapp = Map.fromList fieldsp
         mapt = Map.fromList (List.map (\(s, ty) -> (s, TopPattern ty)) fieldst)
-instanceOf (IntPattern n1) (IntPattern n2)
+instanceOf pred (IntPattern n1) (IntPattern n2)
   | n1 == n2 = True
   | otherwise = False
-instanceOf (StringPattern s1) (StringPattern s2)
+instanceOf pred (StringPattern s1) (StringPattern s2)
   | s1 == s2  = True
   | otherwise = False
-instanceOf (BoolPattern b1) (BoolPattern b2)
+instanceOf pred (BoolPattern b1) (BoolPattern b2)
   | b1 == b2  = True
   | otherwise = False
-instanceOf (ArrayPattern ps1) (ArrayPattern ps2)
-  | n1 == n2 = List.any (uncurry instanceOf) (List.zip ps1 ps2)
+instanceOf pred (ArrayPattern ps1) (ArrayPattern ps2)
+  | n1 == n2 = pred (uncurry (instanceOf pred)) (List.zip ps1 ps2)
   | otherwise = False
   where n1 = List.length ps1
         n2 = List.length ps2
-instanceOf (TuplePattern ps1) (TuplePattern ps2)
-  | n1 == n2 = List.any (uncurry instanceOf) (List.zip ps1 ps2)
+instanceOf pred (TuplePattern ps1) (TuplePattern ps2)
+  | n1 == n2 = pred (uncurry (instanceOf pred)) (List.zip ps1 ps2)
   | otherwise = False
   where n1 = List.length ps1
         n2 = List.length ps2
-instanceOf (RecordPattern fields1) (RecordPattern fields2)
-  = Map.isSubmapOfBy instanceOf map1 map2
+instanceOf pred (RecordPattern fields1) (RecordPattern fields2)
+  = Map.isSubmapOfBy (instanceOf pred) map1 map2
   where map1 = Map.fromList fields1
         map2 = Map.fromList fields2
-instanceOf p1 (DifferencePattern p2 p3)
-  | instanceOf p1 p2 = not (instanceOf p1 p3)
+instanceOf pred p1 (DifferencePattern p2 p3)
+  | instanceOf pred p1 p2 = not (instanceOf List.all p1 p3)
   | otherwise        = False
-instanceOf (UnionPattern p1 p2) p3 =
-  instanceOf p1 p3 && instanceOf p2 p3
-instanceOf p1 (UnionPattern p2 p3) =
-  instanceOf p1 p2 || instanceOf p1 p3
-instanceOf p1 p2 = False
+instanceOf pred (UnionPattern p1 p2) p3 =
+  instanceOf pred p1 p3 && instanceOf pred p2 p3
+instanceOf pred p1 (UnionPattern p2 p3) =
+  instanceOf pred p1 p2 || instanceOf pred p1 p3
+instanceOf pred p1 p2 = False
 
 covering :: Pattern -> [TypedMatchExpr] -> [CoveringResult]
 covering p []
   | isBottom p = [Covered]
   | otherwise  = [Nonexhaustive p]
 covering p (mexpr:mexprs)
-  | instanceOf q p = covering (refine p q) mexprs
+  | instanceOf List.any q p = covering (refine p q) mexprs
   | otherwise      =
     Redundant mexpr : covering (refine p q) mexprs
   where q = create mexpr

@@ -49,8 +49,30 @@ funDecl = withPos $ do
     sameOrIndented
     s <- block statement
     spaces
+    fundecls <- many (funDeclWithName name)
     return $ FunDecl name (fromMaybe [] typevarsM) args typeM (makeCompound s)
 
+funDeclWithName :: String -> IParser (String, [String], [MatchExpr], Maybe Type, Statement)
+funDeclWithName name = do
+    string "fun"
+    spaces'
+    string name
+    spaces'
+    typevarsM <- optionMaybe $ char '<' >> spaces' >>
+                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
+                     spaces' <* char '>'
+    spaces'
+    args <- sepBy1 matchExpr spaces'
+    spaces'
+    typeM <- optionMaybe $ string "->" >> spaces' >> type_
+    spaces'
+    char '='
+    spaces
+    sameOrIndented
+    s <- block statement
+    spaces
+    return (name, fromMaybe [] typevarsM, args, typeM, makeCompound s)
+    
 decl = funDecl
    <|> typeDecl
 
