@@ -1,5 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes #-} --Required for type checking instanceOf
 module MatchCheck where
 
 import Prelude hiding (and)
