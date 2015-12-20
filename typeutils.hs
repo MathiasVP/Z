@@ -37,14 +37,12 @@ inferList inferer env argOrd subst list =
 follow :: Substitution -> Type -> Type
 follow subst = fol Set.empty
   where
-    fol visited (TypeVar u) =
-      case Map.lookup u subst of
-        Just (TypeVar u') ->
-          if u == u' then TypeVar u'
-          else if Set.member u' visited then (TypeVar u')
-               else fol (Set.insert u visited) (TypeVar u')
-        Just t -> fol visited t
-        Nothing -> TypeVar u
+    fol visited (TypeVar u)
+      | Set.member u visited = TypeVar u
+      | otherwise =
+        case Map.lookup u subst of
+          Just t -> fol (Set.insert u visited) t
+          Nothing -> TypeVar u
     fol visited (Array ty) = Array (fol visited ty)
     fol visited (Tuple types) = Tuple (List.map (fol visited) types)
     fol visited (Record b fields) =

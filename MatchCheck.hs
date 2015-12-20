@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-} --Required for type checking instanceOf
 module MatchCheck where
 
@@ -62,110 +63,131 @@ formatMatchWarning (Redundant tmexpr) =
   unlines ["Warning: Match has redundant pattern.",
            "\tRedundant pattern: " ++ ppTypedMatchExpr tmexpr]
 
-matchCheck :: [TypedDecl] -> Writer [CoveringResult] Bool
-matchCheck = allM check
+matchCheck :: Env -> [TypedDecl] -> Writer [CoveringResult] Bool
+matchCheck env = allM (check env)
 
-check :: TypedDecl -> Writer [CoveringResult] Bool
-check (TTypeDecl name args ty) = return True
-check (TFunDecl name tyargs tmexprs retTy stmt) =
-  ands (checkStmt stmt : List.map checkMatchExpr tmexprs)
+check :: Env -> TypedDecl -> Writer [CoveringResult] Bool
+check env (TTypeDecl name args ty) = return True
+check env (TFunDecl name tyargs tmexprs retTy stmt) =
+  ands (checkStmt env stmt : List.map (checkMatchExpr env) tmexprs)
 
 and :: Monad m => m Bool -> m Bool -> m Bool
 and = liftM2 (&&)
 
 ands = List.foldr and (return True)
 
-checkStmt :: TypedStatement -> Writer [CoveringResult] Bool
-checkStmt (TIfStatement expr stmtThen Nothing) =
-  ands [checkExpr expr, checkStmt stmtThen]
-checkStmt (TIfStatement expr stmtThen (Just stmtElse)) =
-  ands [checkExpr expr, checkStmt stmtThen, checkStmt stmtElse]
-checkStmt (TWhileStatement expr stmt) =
-  ands [checkExpr expr, checkStmt stmt]
-checkStmt (TForStatement mexpr expr stmt) =
-  ands [checkMatchExpr mexpr, checkExpr expr, checkStmt stmt]
-checkStmt (TCompoundStatement stmts) =
-  ands (List.map checkStmt stmts)
-checkStmt (TAssignStatement (Left mexpr) expr) =
-  ands [checkMatchExpr mexpr, checkExpr expr]
-checkStmt (TAssignStatement (Right lvexpr) expr) =
-  ands [checkLvalExpr lvexpr, checkExpr expr]
-checkStmt (TMatchStatement (expr, ty) actions) = do
-  tell (covering (ideal ty) (List.map fst actions))
-  return True
-checkStmt (TReturnStatement expr) = checkExpr expr
-checkStmt TBreakStatement = return True
-checkStmt TContinueStatement = return True
-checkStmt (TDeclStatement decl) = check decl
+matchable :: Type -> Bool
+matchable (Arrow _ _) = False
+matchable RealType = False
+matchable _ = True
 
-checkExpr :: TypedExpr -> Writer [CoveringResult] Bool
-checkExpr (TIntExpr n, t) = return True
-checkExpr (TRealExpr d, t) = return True
-checkExpr (TBoolExpr b, t) = return True
-checkExpr (TStringExpr s, t) = return True
-checkExpr (TOrExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TAndExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TEqExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TNeqExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TLtExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TGtExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TLeExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TGeExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TAddExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TSubExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TMultExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TDivExpr expr1 expr2, t) =
-  ands [checkExpr expr1, checkExpr expr2]
-checkExpr (TUnaryMinusExpr expr, t) =
-  checkExpr expr
-checkExpr (TBangExpr expr, t) = checkExpr expr
-checkExpr (TCallExpr funexpr argexpr, t) =
-  ands [checkExpr funexpr, checkExpr argexpr]
-checkExpr (TListExpr exprs, t) =
-  ands (List.map checkExpr exprs)
-checkExpr (TTupleExpr exprs, t) =
-  ands (List.map checkExpr exprs)
-checkExpr (TRecordExpr fields, t) =
-  ands (List.map (checkExpr . snd) fields)
-checkExpr (TLValue lvexpr, t) =
-  checkLvalExpr lvexpr
-checkExpr (TLambdaExpr mexprs stmt, t) =
-  ands (checkStmt stmt : (List.map checkMatchExpr mexprs))
+checkStmt :: Env -> TypedStatement -> Writer [CoveringResult] Bool
+checkStmt env (TIfStatement expr stmtThen Nothing) =
+  ands [checkExpr env expr, checkStmt env stmtThen]
+checkStmt env (TIfStatement expr stmtThen (Just stmtElse)) =
+  ands [checkExpr env expr, checkStmt env stmtThen, checkStmt env stmtElse]
+checkStmt env (TWhileStatement expr stmt) =
+  ands [checkExpr env expr, checkStmt env stmt]
+checkStmt env (TForStatement mexpr expr stmt) =
+  ands [checkMatchExpr env mexpr, checkExpr env expr, checkStmt env stmt]
+checkStmt env (TCompoundStatement stmts) =
+  ands (List.map (checkStmt env) stmts)
+checkStmt env (TAssignStatement (Left mexpr) expr) =
+  ands [checkMatchExpr env mexpr, checkExpr env expr]
+checkStmt env (TAssignStatement (Right lvexpr) expr) =
+  ands [checkLvalExpr env lvexpr, checkExpr env expr]
+checkStmt env (TMatchStatement (expr, ty) actions)
+  | matchable ty = do
+    tell (covering env (ideal env ty) (List.map fst actions))
+    return True
+  | otherwise =
+    return True
+checkStmt env (TReturnStatement expr) = checkExpr env expr
+checkStmt _ TBreakStatement = return True
+checkStmt _ TContinueStatement = return True
+checkStmt env (TDeclStatement decl) = check env decl
 
-checkMatchExpr :: TypedMatchExpr -> Writer [CoveringResult] Bool
-checkMatchExpr (mexpr, ty) = do
-  tell (covering (ideal ty) [(mexpr, ty)])
-  return True
+checkExpr :: Env -> TypedExpr -> Writer [CoveringResult] Bool
+checkExpr env (TIntExpr n, t) = return True
+checkExpr env (TRealExpr d, t) = return True
+checkExpr env (TBoolExpr b, t) = return True
+checkExpr env (TStringExpr s, t) = return True
+checkExpr env (TOrExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TAndExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TEqExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TNeqExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TLtExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TGtExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TLeExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TGeExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TAddExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TSubExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TMultExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TDivExpr expr1 expr2, t) =
+  ands [checkExpr env expr1, checkExpr env expr2]
+checkExpr env (TUnaryMinusExpr expr, t) =
+  checkExpr env expr
+checkExpr env (TBangExpr expr, t) = checkExpr env expr
+checkExpr env (TCallExpr funexpr argexpr, t) =
+  ands [checkExpr env funexpr, checkExpr env argexpr]
+checkExpr env (TListExpr exprs, t) =
+  ands (List.map (checkExpr env) exprs)
+checkExpr env (TTupleExpr exprs, t) =
+  ands (List.map (checkExpr env) exprs)
+checkExpr env (TRecordExpr fields, t) =
+  ands (List.map ((checkExpr env) . snd) fields)
+checkExpr env (TLValue lvexpr, t) =
+  checkLvalExpr env lvexpr
+checkExpr env (TLambdaExpr mexprs stmt, t) =
+  ands (checkStmt env stmt : (List.map (checkMatchExpr env) mexprs))
 
-checkLvalExpr :: TypedLValueExpr -> Writer [CoveringResult] Bool
-checkLvalExpr (TVarExpr s, t) = return True
-checkLvalExpr (TFieldAccessExpr lvalue s, t) = return True
-checkLvalExpr (TArrayAccessExpr lvalue expr, t) = checkExpr expr
+checkMatchExpr :: Env -> TypedMatchExpr -> Writer [CoveringResult] Bool
+checkMatchExpr env (mexpr, ty)
+  | matchable ty = do
+    tell (covering env (ideal env ty) [(mexpr, ty)])
+    return True
+  | otherwise =
+    return True
 
-ideal :: Type -> Pattern
-ideal IntType = TopPattern IntType
-ideal BoolType = TopPattern BoolType
-ideal StringType = TopPattern StringType
-ideal (Name s tys) = error "NYI"
-ideal (Array ty) = TopPattern (Array ty)
-ideal (Tuple tys) = TuplePattern (List.map ideal tys)
-ideal (Record _ fields) = RecordPattern (List.map (\(s, ty) -> (s, ideal ty)) fields)
-ideal (Forall _ ty) = error "NYI"
-ideal (Union ty1 ty2) = unionPattern p1 p2
-  where p1 = ideal ty1
-        p2 = ideal ty2
-ideal (Intersect ty1 ty2) = error "NYI"
+checkLvalExpr :: Env -> TypedLValueExpr -> Writer [CoveringResult] Bool
+checkLvalExpr env (TVarExpr s, t) = return True
+checkLvalExpr env (TFieldAccessExpr lvalue s, t) = return True
+checkLvalExpr env (TArrayAccessExpr lvalue expr, t) = checkExpr env expr
+
+ideal :: Env -> Type -> Pattern
+ideal env t = evalState (ideal' t) Set.empty
+  where
+    ideal' :: Type -> State (Set String) Pattern
+    ideal' IntType = return $ TopPattern IntType
+    ideal' BoolType = return $ TopPattern BoolType
+    ideal' StringType = return $ TopPattern StringType
+    ideal' (Name s tys) =
+      gets (Set.member s) >>= \case
+        True -> return (TopPattern (Name s tys)) --TODO: This might be bad?
+        False -> modify (Set.insert s) >> ideal' (env ! s) -- TODO: missing type args
+    ideal' (Array ty) = return $ TopPattern (Array ty)
+    ideal' (Tuple tys) = mapM ideal' tys >>= return . TuplePattern
+    ideal' (Record _ fields) =
+      mapM (\(s, ty) -> ideal' ty >>=
+        return . ((,) s)) fields >>= return . RecordPattern
+    ideal' (Forall _ ty) = error "NYI: Forall"
+    ideal' (Union ty1 ty2) = do
+      p1 <- ideal' ty1
+      p2 <- ideal' ty2
+      return $ unionPattern p1 p2
+    ideal' (Intersect ty1 ty2) = error "NYI: Intersect"
+    ideal' (TypeVar u) = error "NYI: TypeVar"
 
 unionPattern :: Pattern -> Pattern -> Pattern
 unionPattern (BottomPattern IntType) p@(IntPattern n) = p
@@ -182,7 +204,7 @@ unionPattern (BottomPattern (Record _ fieldst)) (RecordPattern fieldsp)
   where subdomain = Map.isSubmapOfBy (const (const True))
         mapt = Map.fromList fieldst
         mapp = Map.fromList fieldsp
-        
+
         unionIfPresent (s, p) =
           case Map.lookup s mapt of
             Just t -> (s, unionPattern (BottomPattern t) p)
@@ -230,6 +252,12 @@ unionPattern (UnionPattern p1 p2) (UnionPattern p3 p4) =
 unionPattern p1 (UnionPattern p2 p3) = UnionPattern (UnionPattern p1 p2) p3
 unionPattern p1 p2 = UnionPattern p1 p2
 
+differencePattern :: Pattern -> Pattern -> Pattern
+differencePattern (UnionPattern p1 p2) p3
+  | p1 == p3 = p2
+  | p2 == p3 = p1
+differencePattern p1 p2 = DifferencePattern p1 p2
+
 isBottom :: Pattern -> Bool
 isBottom (BottomPattern _) = True
 isBottom (ArrayPattern ps) = List.all isBottom ps
@@ -254,7 +282,7 @@ refine p q = ref p q
     ref (BottomPattern ty) _ = BottomPattern ty
     ref (TopPattern ty1) (TopPattern ty2)
       | ty1 == ty2 = BottomPattern ty1
-      | otherwise  = DifferencePattern (TopPattern ty1) (TopPattern ty2)
+      | otherwise  = differencePattern (TopPattern ty1) (TopPattern ty2)
     ref p1 (UnionPattern p2 p3) = ref (ref p1 p2) p3
     ref p1 (DifferencePattern p2 p3) = ref p1 (ref p2 p3)
     ref (IntPattern _) (TopPattern IntType) = BottomPattern IntType
@@ -278,6 +306,8 @@ refine p q = ref p q
     ref (ArrayPattern ps) (TopPattern (Tuple tys))
       | List.length ps == List.length tys =
         ArrayPattern (zipWith ref ps (List.map TopPattern tys))
+    ref (TuplePattern [p1]) p2 = ref p1 p2
+    ref p1 (TuplePattern [p2]) = ref p1 p2
     ref (TuplePattern ps1) (TuplePattern ps2)
       | n1 > n2   = TuplePattern (zipWith ref ps1 ps2 ++ List.drop n2 ps1)
       | n1 < n2   = TuplePattern (zipWith ref ps1 ps2 ++ List.drop n1 ps2)
@@ -285,7 +315,7 @@ refine p q = ref p q
       where n1 = List.length ps1
             n2 = List.length ps2
     ref (RecordPattern fields1) (RecordPattern fields2) =
-      DifferencePattern (RecordPattern include) (RecordPattern exclude)
+      differencePattern (RecordPattern include) (RecordPattern exclude)
       where (include, exclude) = foldr f ([], []) fields1
             f (s, p) (include, exclude) =
               case Map.lookup s map2 of
@@ -294,19 +324,19 @@ refine p q = ref p q
             map2 = Map.fromList fields2
     ref (DifferencePattern p1 p2) p3 =
       case ref p1 p3 of
-        DifferencePattern q1 q2 -> DifferencePattern q1 (unionPattern p2 q2)
+        DifferencePattern q1 q2 -> differencePattern q1 (unionPattern p2 q2)
         q -> ref q p2
-    ref p1 p2 = DifferencePattern p1 p2
+    ref p1 p2 = differencePattern p1 p2
 
-create :: TypedMatchExpr -> Pattern
-create (TTupleMatchExpr mexprs, _) = TuplePattern (List.map create mexprs)
-create (TListMatchExpr mexprs, _) = ArrayPattern (List.map create mexprs)
-create (TRecordMatchExpr fields, _) = RecordPattern (List.map f fields)
-  where f (s, tmexpr) = (s, create tmexpr)
-create (TVarMatch _, t) = ideal t
-create (TIntMatchExpr n, _) = IntPattern n
-create (TStringMatchExpr s, _) = StringPattern s
-create (TBoolMatchExpr b, _) = BoolPattern b
+create :: Env -> TypedMatchExpr -> Pattern
+create env (TTupleMatchExpr mexprs, _) = TuplePattern (List.map (create env) mexprs)
+create env (TListMatchExpr mexprs, _) = ArrayPattern (List.map (create env) mexprs)
+create env (TRecordMatchExpr fields, _) = RecordPattern (List.map f fields)
+  where f (s, tmexpr) = (s, create env tmexpr)
+create env (TVarMatch _, t) = ideal env t
+create env (TIntMatchExpr n, _) = IntPattern n
+create env (TStringMatchExpr s, _) = StringPattern s
+create env (TBoolMatchExpr b, _) = BoolPattern b
 
 {- pred = List.all => [p1, p2, ..., pN] is an instance of [q1, q2, ..., qN] iff
                       for all i. pi is an instance of qi
@@ -366,6 +396,8 @@ instanceOf pred (ArrayPattern ps1) (ArrayPattern ps2)
   | otherwise = False
   where n1 = List.length ps1
         n2 = List.length ps2
+instanceOf pred (TuplePattern [p1]) p2 = instanceOf pred p1 p2
+instanceOf pred p1 (TuplePattern [p2]) = instanceOf pred p1 p2
 instanceOf pred (TuplePattern ps1) (TuplePattern ps2)
   | n1 == n2 = pred (uncurry (instanceOf pred)) (List.zip ps1 ps2)
   | otherwise = False
@@ -384,12 +416,12 @@ instanceOf pred p1 (UnionPattern p2 p3) =
   instanceOf pred p1 p2 || instanceOf pred p1 p3
 instanceOf pred p1 p2 = False
 
-covering :: Pattern -> [TypedMatchExpr] -> [CoveringResult]
-covering p []
+covering :: Env -> Pattern -> [TypedMatchExpr] -> [CoveringResult]
+covering env p []
   | isBottom p = [Covered]
   | otherwise  = [Nonexhaustive p]
-covering p (mexpr:mexprs)
-  | instanceOf List.any q p = covering (refine p q) mexprs
+covering env p (mexpr:mexprs)
+  | instanceOf List.any q p = covering env (refine p q) mexprs
   | otherwise      =
-    Redundant mexpr : covering (refine p q) mexprs
-  where q = create mexpr
+    Redundant mexpr : covering env (refine p q) mexprs
+  where q = create env mexpr

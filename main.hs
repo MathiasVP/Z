@@ -11,7 +11,7 @@ main = let path = "../test.z"
                Left err -> print err
                Right ast -> do
                  (typed, env, subst) <- T.infer ast
-                 let (b, badMatches) = runWriter (MC.matchCheck typed)
+                 let (b, badMatches) = runWriter (MC.matchCheck env typed)
                  mapM putStrLn (List.map MC.formatMatchWarning badMatches)
                  case b of
                   True -> return () --Continue compilation

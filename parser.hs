@@ -95,7 +95,7 @@ keywords = ["type", "fun", "fn", "if", "else",
 id_ :: IParser String
 id_ = do
     c <- letter <|> char '_'
-    s <- many (alphaNum <|> char '_')
+    s <- many (alphaNum <|> oneOf "_'")
     if elem (c:s) keywords then
       fail ""
     else
