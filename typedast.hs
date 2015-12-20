@@ -1,5 +1,6 @@
 module TypedAst(module TypedAst, module Ast) where
 import Ast
+import Types
 import qualified Data.List as List
 
 data TypedDecl = TTypeDecl String [String] Type
@@ -30,7 +31,7 @@ data TExpr = TIntExpr Int
            | TRecordExpr [(String, TypedExpr)]
            | TLValue TypedLValueExpr
            | TLambdaExpr [TypedMatchExpr] TypedStatement
-  deriving (Show)
+  deriving Show
 
 type TypedExpr = (TExpr, Type)
 

@@ -12,6 +12,7 @@ import qualified Data.List as List
 import Data.Set (Set)
 import Data.Map (Map)
 import Data.Map ((!))
+import Types
 import Ast
 import TypedAst
 import TypeUtils

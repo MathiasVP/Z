@@ -5,6 +5,7 @@ import Control.Applicative hiding (many, (<|>))
 import Control.Monad.State
 import Data.Char
 import Data.Maybe
+import Types
 import Ast
 
 type IParser a = ParsecT String () (State SourcePos) a

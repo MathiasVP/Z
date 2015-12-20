@@ -8,6 +8,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
 import TypedAst
+import Types
 
 type Substitution = Map U.Unique Type
 type Env = Map String Type

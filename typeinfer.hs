@@ -10,6 +10,7 @@ import Data.Bool
 import Data.Unique
 import Data.Set (Set)
 import Data.Map (Map)
+import Types
 import TypedAst
 import Unification
 import Subtype

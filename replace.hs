@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 module Replace where
+import Types
 import TypeUtils
 import TypedAst
 import Control.Monad.State.Lazy

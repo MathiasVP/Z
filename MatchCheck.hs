@@ -2,6 +2,7 @@
 module MatchCheck where
 
 import Prelude hiding (and)
+import Types
 import TypedAst
 import TypeUtils
 import Utils
