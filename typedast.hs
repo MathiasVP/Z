@@ -52,8 +52,8 @@ ppTypedMatchExpr (TListMatchExpr tmexprs, _) =
   "[" ++ List.intercalate ", " (List.map ppTypedMatchExpr tmexprs) ++ "]"
 ppTypedMatchExpr (TRecordMatchExpr tmexprs, _) =
   "{" ++ List.intercalate ", " (List.map f tmexprs) ++ "}"
-  where f (s, tmexpr) = "s : " ++ ppTypedMatchExpr tmexpr
-ppTypedMatchExpr (TVarMatch s, ty) = s ++ " : " ++ show ty
+  where f (s, tmexpr) = s ++ " = " ++ ppTypedMatchExpr tmexpr
+ppTypedMatchExpr (TVarMatch s, ty) = s ++ ": " ++ show ty
 ppTypedMatchExpr (TIntMatchExpr n, _) = show n
 ppTypedMatchExpr (TStringMatchExpr s, _) = "\"" ++ s ++ "\""
 ppTypedMatchExpr (TBoolMatchExpr b, _) = show b

@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 module MatchCheck where
 
@@ -18,7 +17,6 @@ import Data.Ord
 import Control.Monad.Loops
 import Control.Monad.Writer.Lazy
 import Control.Monad.State
-import qualified Debug.Trace as Debug
 
 data CoveringResult
   = Covered
@@ -351,7 +349,7 @@ instanceOf pred (TuplePattern ps) (TopPattern (Tuple tys))
   | List.length ps == List.length tys =
     List.all (uncurry (instanceOf pred)) (List.zip ps (List.map TopPattern tys))
 instanceOf pred (RecordPattern fieldsp) (TopPattern (Record _ fieldst)) =
-  Map.isSubmapOfBy (instanceOf pred) mapt mapp
+  Map.isSubmapOfBy (instanceOf pred) mapp mapt
   where mapp = Map.fromList fieldsp
         mapt = Map.fromList (List.map (\(s, ty) -> (s, TopPattern ty)) fieldst)
 instanceOf pred (IntPattern n1) (IntPattern n2)
@@ -375,7 +373,7 @@ instanceOf pred (TuplePattern ps1) (TuplePattern ps2)
         n2 = List.length ps2
 instanceOf pred (RecordPattern fields1) (RecordPattern fields2)
   = Map.isSubmapOfBy (instanceOf pred) map1 map2
-  where map1 = Map.fromList fields1
+  where map1 = Map.fromList (List.filter (\(s, p) -> not (isBottom p)) fields1)
         map2 = Map.fromList fields2
 instanceOf pred p1 (DifferencePattern p2 p3)
   | instanceOf pred p1 p2 = not (instanceOf List.all p1 p3)
