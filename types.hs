@@ -1,6 +1,6 @@
 module Types where
-import Data.Unique
 import qualified Data.List as List
+import qualified Data.Map as Map
 
 data Type
   = IntType
@@ -12,11 +12,11 @@ data Type
   | Array Type
   | Tuple [Type]
   | Record Bool [(String, Type)]
-  | Forall Unique Type
+  | Forall Int Type
   | Arrow Type Type
   | Union Type Type
   | Intersect Type Type
-  | TypeVar Unique
+  | TypeVar Int
   | Error
     deriving (Eq, Ord)
 
@@ -49,9 +49,6 @@ instance Show Type where
   show (Forall u ty) = "forall " ++ show u ++ ". " ++ show ty
   show (TypeVar u) = show u
   show Error = "Error"
-
-instance Show Unique where
-  show u = "t" ++ show (hashUnique u)
   
 -------------------------------------------------------
 -- Type simplications

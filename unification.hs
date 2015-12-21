@@ -7,7 +7,6 @@ import Data.Ord
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
-import qualified Data.Unique as U
 import qualified Data.List as List
 import Data.Set (Set)
 import Data.Map (Map)

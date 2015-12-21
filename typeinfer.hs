@@ -7,7 +7,6 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Maybe as Maybe
 import Data.Bool
-import Data.Unique
 import Data.Set (Set)
 import Data.Map (Map)
 import Types

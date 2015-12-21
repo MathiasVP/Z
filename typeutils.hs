@@ -1,7 +1,5 @@
 module TypeUtils where
-import qualified Data.Unique as U
 import Data.Map (Map)
-import Data.Unique
 import Control.Monad
 import Data.Ord
 import qualified Data.Map as Map
@@ -9,8 +7,9 @@ import qualified Data.Set as Set
 import qualified Data.List as List
 import TypedAst
 import Types
+import Unique
 
-type Substitution = Map U.Unique Type
+type Substitution = Map Int Type
 type Env = Map String Type
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
@@ -87,13 +86,12 @@ instansiates :: Type -> Map String Type -> Type
 instansiates = Map.foldrWithKey instansiate
 
 mkTypeVar :: IO Type
-mkTypeVar = U.newUnique >>=
-              return . TypeVar
+mkTypeVar = unique >>= return . TypeVar
 
 makeArrow :: [Type] -> Type -> Type
 makeArrow types retTy = List.foldr Arrow retTy types
 
-typevars :: Type -> [Unique]
+typevars :: Type -> [Int]
 typevars (TypeVar u) = [u]
 typevars (Forall u ty) =
   if List.elem u uniques then uniques

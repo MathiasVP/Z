@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RankNTypes #-} --Required for type checking instanceOf
 module MatchCheck where
 
 import Prelude hiding (and)
@@ -54,6 +53,7 @@ instance Show Pattern where
   show (DifferencePattern p1 p@(UnionPattern p2 p3)) = show p1 ++ " - (" ++ show p ++ ")"
   show (DifferencePattern p1 p2) = show p1 ++ " - " ++ show p2
 
+
 formatMatchWarning :: CoveringResult -> String
 formatMatchWarning Covered = ""
 formatMatchWarning (Nonexhaustive p) =
@@ -71,10 +71,7 @@ check env (TTypeDecl name args ty) = return True
 check env (TFunDecl name tyargs tmexprs retTy stmt) =
   ands (checkStmt env stmt : List.map (checkMatchExpr env) tmexprs)
 
-and :: Monad m => m Bool -> m Bool -> m Bool
-and = liftM2 (&&)
-
-ands = List.foldr and (return True)
+ands = List.foldr (liftM2 (&&)) (return True)
 
 matchable :: Type -> Bool
 matchable (Arrow _ _) = False
@@ -263,7 +260,8 @@ isBottom (BottomPattern _) = True
 isBottom (ArrayPattern ps) = List.all isBottom ps
 isBottom (TuplePattern ps) = List.all isBottom ps
 isBottom (UnionPattern p1 p2) = isBottom p1 && isBottom p2
-isBottom (DifferencePattern p1 p2) = instanceOf List.all p1 p2
+isBottom (DifferencePattern p1 p2) = instanceOf List.and p1 p2
+isBottom (RecordPattern fields) = List.all isBottom (List.map snd fields)
 isBottom _ = False
 
 isTop :: Pattern -> Bool
@@ -271,7 +269,8 @@ isTop (TopPattern _) = True
 isTop (ArrayPattern ps) = List.all isTop ps
 isTop (TuplePattern ps) = List.all isTop ps
 isTop (UnionPattern p1 p2) = isTop p1 && isTop p2
-isTop (DifferencePattern p1 p2) = instanceOf List.all p1 p2
+isTop (DifferencePattern p1 p2) = instanceOf List.and p1 p2
+isTop (RecordPattern fields) = List.all isTop (List.map snd fields)
 isTop _ = False
 
 refine :: Pattern -> Pattern -> Pattern
@@ -314,16 +313,16 @@ refine p q = ref p q
       | otherwise = TuplePattern (zipWith ref ps1 ps2)
       where n1 = List.length ps1
             n2 = List.length ps2
-    ref (RecordPattern fields1) (RecordPattern fields2) =
-      differencePattern (RecordPattern include) (RecordPattern exclude)
+    ref (RecordPattern fields1) (RecordPattern fields2)
+      | List.null exclude = RecordPattern include
+      | otherwise         = differencePattern (RecordPattern include) (RecordPattern exclude)
       where (include, exclude) = foldr f ([], []) fields1
             f (s, p) (include, exclude) =
               case Map.lookup s map2 of
                 Just p' -> ((s, ref p p'):include, exclude)
                 Nothing -> (include, (s, p):exclude)
             map2 = Map.fromList fields2
-    ref (DifferencePattern p1 p2) p3 =
-      case ref p1 p3 of
+    ref (DifferencePattern p1 p2) p3 = case ref p1 p3 of
         DifferencePattern q1 q2 -> differencePattern q1 (unionPattern p2 q2)
         q -> ref q p2
     ref p1 p2 = differencePattern p1 p2
@@ -338,11 +337,7 @@ create env (TIntMatchExpr n, _) = IntPattern n
 create env (TStringMatchExpr s, _) = StringPattern s
 create env (TBoolMatchExpr b, _) = BoolPattern b
 
-{- pred = List.all => [p1, p2, ..., pN] is an instance of [q1, q2, ..., qN] iff
-                      for all i. pi is an instance of qi
-   pred = List.any => [p1, p2, ..., pN] is an instance of [q1, q2, ..., qN] iff
-                      for some i. pi is an instance of qi -}
-instanceOf :: (forall a . (a -> Bool) -> [a] -> Bool) -> Pattern -> Pattern -> Bool
+instanceOf :: ([Bool] -> Bool) -> Pattern -> Pattern -> Bool
 instanceOf pred _ (BottomPattern _) = False
 instanceOf pred (BottomPattern IntType) (IntPattern _) = True
 instanceOf pred (BottomPattern StringType) (StringPattern _) = True
@@ -392,23 +387,28 @@ instanceOf pred (BoolPattern b1) (BoolPattern b2)
   | b1 == b2  = True
   | otherwise = False
 instanceOf pred (ArrayPattern ps1) (ArrayPattern ps2)
-  | n1 == n2 = pred (uncurry (instanceOf pred)) (List.zip ps1 ps2)
+  | n1 == n2 = pred (List.zipWith (instanceOf pred) ps1 ps2)
   | otherwise = False
   where n1 = List.length ps1
         n2 = List.length ps2
 instanceOf pred (TuplePattern [p1]) p2 = instanceOf pred p1 p2
 instanceOf pred p1 (TuplePattern [p2]) = instanceOf pred p1 p2
 instanceOf pred (TuplePattern ps1) (TuplePattern ps2)
-  | n1 == n2 = pred (uncurry (instanceOf pred)) (List.zip ps1 ps2)
+  | n1 == n2 = pred (List.zipWith (instanceOf pred) ps1 ps2)
   | otherwise = False
   where n1 = List.length ps1
         n2 = List.length ps2
 instanceOf pred (RecordPattern fields1) (RecordPattern fields2)
-  = Map.isSubmapOfBy (instanceOf pred) map1 map2
-  where map1 = Map.fromList (List.filter (\(s, p) -> not (isBottom p)) fields1)
+  = Map.foldWithKey f False map1
+  where f s p True = True
+        f s p False =
+          case Map.lookup s map2 of
+            Just q -> instanceOf pred p q
+            Nothing -> False
+        map1 = Map.fromList (List.filter (\(s, p) -> not (isBottom p)) fields1)
         map2 = Map.fromList fields2
 instanceOf pred p1 (DifferencePattern p2 p3)
-  | instanceOf pred p1 p2 = not (instanceOf List.all p1 p3)
+  | instanceOf pred p1 p2 = not (instanceOf List.and p1 p3)
   | otherwise        = False
 instanceOf pred (UnionPattern p1 p2) p3 =
   instanceOf pred p1 p3 && instanceOf pred p2 p3
@@ -421,7 +421,7 @@ covering env p []
   | isBottom p = [Covered]
   | otherwise  = [Nonexhaustive p]
 covering env p (mexpr:mexprs)
-  | instanceOf List.any q p = covering env (refine p q) mexprs
+  | instanceOf List.or q p = covering env (refine p q) mexprs
   | otherwise      =
     Redundant mexpr : covering env (refine p q) mexprs
   where q = create env mexpr

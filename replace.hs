@@ -9,11 +9,10 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Set (Set)
 import Data.Map (Map)
-import Data.Unique
 
 replaceType :: Substitution -> Type -> Type
 replaceType subst ty =
-  let replace :: Set Unique -> Type -> State (Set Unique) Type
+  let replace :: Set Int -> Type -> State (Set Int) Type
       replace trace IntType = return IntType
       replace trace BoolType = return BoolType
       replace trace StringType = return StringType
