@@ -9,7 +9,7 @@ import TypedAst
 import Types
 import Unique
 
-type Substitution = Map Int Type
+type Substitution = Map UniqueInt Type
 type Env = Map String Type
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
@@ -91,7 +91,7 @@ mkTypeVar = unique >>= return . TypeVar
 makeArrow :: [Type] -> Type -> Type
 makeArrow types retTy = List.foldr Arrow retTy types
 
-typevars :: Type -> [Int]
+typevars :: Type -> [UniqueInt]
 typevars (TypeVar u) = [u]
 typevars (Forall u ty) =
   if List.elem u uniques then uniques

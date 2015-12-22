@@ -32,13 +32,13 @@ data Pattern = BottomPattern Type --Match nothing of given type
              | ArrayPattern [Pattern]
              | TuplePattern [Pattern]
              | RecordPattern [(String, Pattern)]
-             | UnionPattern Pattern Pattern
              | DifferencePattern Pattern Pattern
-  deriving Eq
+             | UnionPattern Pattern Pattern
+  deriving (Eq, Ord)
 
 instance Show Pattern where
-  show (BottomPattern _) = "_"
-  show (TopPattern _) = "_"
+  show (BottomPattern ty) = "_"
+  show (TopPattern ty) = "_"
   show (IntPattern n) = show n
   show (StringPattern s) = "\"" ++ s ++ "\""
   show (BoolPattern b) = show b
@@ -46,13 +46,8 @@ instance Show Pattern where
   show (TuplePattern ps) = "(" ++ List.intercalate ", " (List.map show ps) ++ ")"
   show (RecordPattern ps) = "{" ++ List.intercalate ", " (List.map f ps) ++ "}"
     where f (s, p) = s ++ " = " ++ show p
-  show (UnionPattern p@(DifferencePattern p1 p2) p3) = "(" ++ show p ++ ") | " ++ show p3
-  show (UnionPattern p1 p@(DifferencePattern p2 p3)) = show p1 ++ " | (" ++ show p ++ ")"
-  show (UnionPattern p1 p2) = show p1 ++ " | " ++ show p2
-  show (DifferencePattern p@(UnionPattern p1 p2) p3) = "(" ++ show p ++ ")" ++ " - " ++ show p3
-  show (DifferencePattern p1 p@(UnionPattern p2 p3)) = show p1 ++ " - (" ++ show p ++ ")"
-  show (DifferencePattern p1 p2) = show p1 ++ " - " ++ show p2
-
+  show (UnionPattern p1 p2) = "(" ++ show p1 ++ " | " ++ show p2 ++ ")"
+  show (DifferencePattern p1 p2) = "(" ++ show p1 ++ " - " ++ show p2 ++ ")"
 
 formatMatchWarning :: CoveringResult -> String
 formatMatchWarning Covered = ""
@@ -245,11 +240,30 @@ unionPattern (RecordPattern fields1) (RecordPattern fields2)
   where map1 = Map.fromList fields1
         map2 = Map.fromList fields2
 unionPattern (UnionPattern p1 p2) (UnionPattern p3 p4) =
-  UnionPattern (UnionPattern (UnionPattern p1 p2) p3) p4
-unionPattern p1 (UnionPattern p2 p3) = UnionPattern (UnionPattern p1 p2) p3
+  minimum [UnionPattern (UnionPattern (UnionPattern p1 p2) p3) p4,
+           UnionPattern q13 q24, UnionPattern q14 q23]
+  where q13 = unionPattern p1 p3
+        q24 = unionPattern p2 p4
+        q14 = unionPattern p1 p4
+        q23 = unionPattern p2 p3
+unionPattern (UnionPattern p1 p2) p3
+  | containsPattern (UnionPattern p1 p2) p3 = UnionPattern p1 p2
+  | otherwise = minimum [UnionPattern (UnionPattern p1 p2) p3,
+                         UnionPattern p13 p2, UnionPattern p23 p1]
+    where p13 = unionPattern p1 p3
+          p23 = unionPattern p2 p3
+unionPattern p1 (UnionPattern p2 p3)
+  | containsPattern (UnionPattern p2 p3) p1 = UnionPattern p2 p3
+  | otherwise = minimum [UnionPattern p1 (UnionPattern p2 p3),
+                     UnionPattern p12 p3, UnionPattern p13 p2]
+    where p12 = unionPattern p1 p2
+          p13 = unionPattern p1 p3
 unionPattern p1 p2 = UnionPattern p1 p2
 
 differencePattern :: Pattern -> Pattern -> Pattern
+differencePattern (TopPattern BoolType) p
+  | List.all (containsPattern p) [BoolPattern False, BoolPattern True] =
+    BottomPattern BoolType
 differencePattern (UnionPattern p1 p2) p3
   | p1 == p3 = p2
   | p2 == p3 = p1
@@ -260,7 +274,9 @@ isBottom (BottomPattern _) = True
 isBottom (ArrayPattern ps) = List.all isBottom ps
 isBottom (TuplePattern ps) = List.all isBottom ps
 isBottom (UnionPattern p1 p2) = isBottom p1 && isBottom p2
-isBottom (DifferencePattern p1 p2) = instanceOf List.and p1 p2
+isBottom (DifferencePattern p1 p2)
+  | isBottom p1 = True
+  | otherwise   = instanceOf List.and p1 p2
 isBottom (RecordPattern fields) = List.all isBottom (List.map snd fields)
 isBottom _ = False
 
@@ -268,10 +284,23 @@ isTop :: Pattern -> Bool
 isTop (TopPattern _) = True
 isTop (ArrayPattern ps) = List.all isTop ps
 isTop (TuplePattern ps) = List.all isTop ps
+isTop (UnionPattern (BoolPattern True) p)
+  | containsPattern p (BoolPattern False) = True
+isTop (UnionPattern (BoolPattern False) p)
+  | containsPattern p (BoolPattern True) = True
 isTop (UnionPattern p1 p2) = isTop p1 && isTop p2
 isTop (DifferencePattern p1 p2) = instanceOf List.and p1 p2
 isTop (RecordPattern fields) = List.all isTop (List.map snd fields)
 isTop _ = False
+
+containsPattern :: Pattern -> Pattern -> Bool
+containsPattern p q
+  | p == q = True
+containsPattern (UnionPattern p1 p2) q =
+  containsPattern p1 q || containsPattern p2 q
+containsPattern (DifferencePattern p1 p2) q =
+  containsPattern p1 q && not (containsPattern p2 q)
+containsPattern _ _ = False
 
 refine :: Pattern -> Pattern -> Pattern
 refine p q = ref p q
@@ -281,8 +310,11 @@ refine p q = ref p q
     ref (BottomPattern ty) _ = BottomPattern ty
     ref (TopPattern ty1) (TopPattern ty2)
       | ty1 == ty2 = BottomPattern ty1
-      | otherwise  = differencePattern (TopPattern ty1) (TopPattern ty2)
+    ref (TopPattern BoolType) p
+      | List.all (containsPattern p) [BoolPattern True, BoolPattern False] =
+        BottomPattern BoolType
     ref p1 (UnionPattern p2 p3) = ref (ref p1 p2) p3
+    ref (UnionPattern p1 p2) p3 = UnionPattern (ref p1 p3) (ref p2 p3)
     ref p1 (DifferencePattern p2 p3) = ref p1 (ref p2 p3)
     ref (IntPattern _) (TopPattern IntType) = BottomPattern IntType
     ref (IntPattern n1) (IntPattern n2)
@@ -313,16 +345,15 @@ refine p q = ref p q
       | otherwise = TuplePattern (zipWith ref ps1 ps2)
       where n1 = List.length ps1
             n2 = List.length ps2
-    ref (RecordPattern fields1) (RecordPattern fields2)
-      | List.null exclude = RecordPattern include
-      | otherwise         = differencePattern (RecordPattern include) (RecordPattern exclude)
-      where (include, exclude) = foldr f ([], []) fields1
-            f (s, p) (include, exclude) =
+    ref (RecordPattern fields1) (RecordPattern fields2) =
+      RecordPattern (List.map f fields1)
+      where f (s, p) =
               case Map.lookup s map2 of
-                Just p' -> ((s, ref p p'):include, exclude)
-                Nothing -> (include, (s, p):exclude)
+                Just p' -> (s, ref p p')
+                Nothing -> (s, p)
             map2 = Map.fromList fields2
-    ref (DifferencePattern p1 p2) p3 = case ref p1 p3 of
+    ref (DifferencePattern p1 p2) p3 =
+      case ref p1 p3 of
         DifferencePattern q1 q2 -> differencePattern q1 (unionPattern p2 q2)
         q -> ref q p2
     ref p1 p2 = differencePattern p1 p2
@@ -399,7 +430,8 @@ instanceOf pred (TuplePattern ps1) (TuplePattern ps2)
   where n1 = List.length ps1
         n2 = List.length ps2
 instanceOf pred (RecordPattern fields1) (RecordPattern fields2)
-  = Map.foldWithKey f False map1
+  | List.null fields1 = True
+  | otherwise = Map.foldWithKey f False map1
   where f s p True = True
         f s p False =
           case Map.lookup s map2 of

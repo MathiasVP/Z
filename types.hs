@@ -1,6 +1,7 @@
 module Types where
 import qualified Data.List as List
 import qualified Data.Map as Map
+import Unique
 
 data Type
   = IntType
@@ -12,11 +13,11 @@ data Type
   | Array Type
   | Tuple [Type]
   | Record Bool [(String, Type)]
-  | Forall Int Type
+  | Forall UniqueInt Type
   | Arrow Type Type
   | Union Type Type
   | Intersect Type Type
-  | TypeVar Int
+  | TypeVar UniqueInt
   | Error
     deriving (Eq, Ord)
 
