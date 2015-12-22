@@ -5,10 +5,11 @@ import Control.Monad.State.Lazy
 import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import qualified Data.Maybe as Maybe
+import Data.Maybe
 import Data.Bool
 import Data.Set (Set)
 import Data.Map (Map)
+
 import Types
 import TypedAst
 import Unification
@@ -21,7 +22,7 @@ extendRecord :: String -> Type -> Type -> Substitution -> Substitution
 extendRecord name ty (TypeVar u) subst =
   case follow subst (TypeVar u) of
     Record b fields
-      | Maybe.isNothing (List.lookup name fields) ->
+      | isNothing (List.lookup name fields) ->
         Map.insert u (Record b ((name, ty):fields)) subst
       | otherwise -> Map.insert u (Record b (List.map f fields)) subst
         where f (name', ty')
@@ -61,7 +62,9 @@ infer decls = do
 
     inferDecl (FunDecl name tyArgs args retTy statement) env argOrd subst = do
       (args', env', argOrd', subst') <- inferList (inferMatchExpr Nothing) env argOrd subst args
-      retTy' <- Maybe.fromMaybe mkTypeVar (liftM return retTy)
+      -- retTy = Nothing -> retTy' = mkTypeVar
+      -- retTy = Just t -> retTy' = t
+      retTy' <- fromMaybe mkTypeVar (liftM return retTy)
       let types = List.map snd args'
           functionTy = List.foldr (makeForall subst') (makeArrow types retTy') types
           env'' = Map.insert name functionTy env'
