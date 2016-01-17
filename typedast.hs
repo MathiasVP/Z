@@ -32,7 +32,7 @@ data TExpr = TIntExpr Int
            | TLValue TypedLValueExpr
            | TLambdaExpr [TypedMatchExpr] TypedStatement
   deriving Show
-
+  
 type TypedExpr = (TExpr, Type)
 
 data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]

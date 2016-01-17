@@ -9,7 +9,7 @@ newtype UniqueInt = UniqueInt Int
   deriving (Typeable, Eq, Ord)
 
 instance Show UniqueInt where
-  show (UniqueInt n) = "t" ++ show n
+  show (UniqueInt n) = show n
   
 counter :: IORef UniqueInt
 counter = declareIORef "unique-counter" (UniqueInt 0)
