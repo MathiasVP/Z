@@ -105,15 +105,12 @@ declGen env (TFunDecl name tyargs args ty stmt) =
      Just endLab <- gets endLabel
      modify (insertFrag uname (ProcFrag uname ty (Seq stmt (Label retname))))
 
-if_ :: IRGenM [View] -> IRGenM IR.Stmt -> IRGenM IR.Stmt -> IRGenM IR.Stmt
-if_ mtest mthen melse =
+if_ :: View -> IR.Stmt -> IR.Stmt -> IRGenM IR.Stmt
+if_ mtest then_ else_ =
   do thenLab <- uniq "then"
      elseLab <- uniq "else"
      doneLab <- uniq "done"
-     test_ <- unCxs mtest thenLab elseLab
-     then_ <- mthen
-     else_ <- melse
-     return $ seq [ test_ ,
+     return $ seq [ unCx mtest thenLab elseLab,
                     Label thenLab,
                     then_,
                     Jump doneLab,
@@ -133,18 +130,10 @@ simpleVar (FunctionParam ty num) =
 simpleVar (ClosureLocal ty offs) =
   (Mem (BinOp Plus (simpleVar (FunctionParam ty 0)) (intConst offs), ty), ty)
 
-unCx :: IRGenM View -> UniqString -> UniqString -> IRGenM IR.Stmt
-unCx view trueLab falseLab =
-  view >>= \case
-    Cx gen -> return (gen trueLab falseLab)
-    Ex texpr -> return (CJump Rneq texpr false trueLab falseLab)
+unCx :: View -> UniqString -> UniqString -> IR.Stmt
+unCx (Cx gen) trueLab falseLab = gen trueLab falseLab
+unCx (Ex texpr) trueLab falseLab = CJump Rneq texpr false trueLab falseLab
 
-unCxs :: IRGenM [View] -> UniqString -> UniqString -> IRGenM IR.Stmt
-unCxs view trueLab falseLab =
-  view >>= \case
-    [Cx gen] -> return (gen trueLab falseLab)
-    [Ex texpr] -> return (CJump Rneq texpr false trueLab falseLab)
-    
 unEx :: View -> IRGenM IR.TExpr
 unEx (Cx gen) =
   do trueLab <- uniq "true"
@@ -158,8 +147,8 @@ unEx (Cx gen) =
                    , Label trueLab ] expr
 unEx (Ex texpr) = return texpr
 
-while :: IRGenM [IR.View] -> IRGenM IR.Stmt -> IRGenM IR.Stmt
-while mtest mbody =
+while :: IR.View -> IR.Stmt -> IRGenM IR.Stmt
+while test body =
   do breakLab <- uniq "break"
      thenLab <- uniq "then"
      testLab <- uniq "test"
@@ -167,14 +156,12 @@ while mtest mbody =
      oldBreakLab <- gets breakLabel
      oldContLab <- gets contLabel
 
-     test_ <- unCxs mtest thenLab breakLab
      modify (updateBreakLabel (Just breakLab))
      modify (updateContLabel (Just testLab))
-     body <- mbody
      modify (updateBreakLabel oldBreakLab)
      modify (updateContLabel oldContLab)
      return $ seq [ Label testLab,
-                    test_,
+                    unCx test thenLab breakLab,
                     Label thenLab,
                     body,
                     Jump testLab,
@@ -207,14 +194,14 @@ emptyStmt = return $ ExprStmt false
 
 stmtGen :: Env -> TypedStatement -> IRGenM IR.Stmt
 stmtGen env (TIfStatement testExpr thenStmt elseStmt) =
-  if_ testExpr' thenStmt' elseStmt'
-  where testExpr' = exprGen env testExpr
-        thenStmt' = stmtGen env thenStmt
-        elseStmt' = maybe emptyStmt (stmtGen env) elseStmt
+  do [view] <- exprGen env testExpr
+     then' <- stmtGen env thenStmt
+     else' <- maybe emptyStmt (stmtGen env) elseStmt
+     if_ view then' else'
 stmtGen env (TWhileStatement testExpr stmt) =
-  while testExpr' stmt'
-  where stmt' = stmtGen env stmt
-        testExpr' = exprGen env testExpr
+  do [view] <- exprGen env testExpr
+     stmt' <- stmtGen env stmt
+     while view stmt'
 stmtGen env (TCompoundStatement stmts) =
   seqM (mapM (stmtGen env) stmts)
 stmtGen env TBreakStatement =
