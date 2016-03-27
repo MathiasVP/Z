@@ -61,14 +61,6 @@ instance Show Pattern where
   show (UnionPattern p1 p2) = "(" ++ show p1 ++ " | " ++ show p2 ++ ")"
   show (DifferencePattern p1 p2) = "(" ++ show p1 ++ " - " ++ show p2 ++ ")"
 -}
-formatMatchWarning :: CoveringResult -> String
-formatMatchWarning Covered = ""
-formatMatchWarning (Nonexhaustive p) =
-  unlines ["Warning: Match is not exhaustive.",
-           "\tMissing pattern: " ++ show p]
-formatMatchWarning (Redundant tmexpr) =
-  unlines ["Warning: Match has redundant pattern.",
-           "\tRedundant pattern: " ++ ppTypedMatchExpr tmexpr]
 
 matchCheck :: Env -> [TypedDecl] -> Writer [CoveringResult] Bool
 matchCheck env = allM (check env)

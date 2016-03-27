@@ -69,16 +69,22 @@ subtype t1 t2 env argOrd subst =
         Nothing -> Map.insert k def map
     
     sub trace bind1 bind2 assum subst (Forall u t1) t2 =
-      sub trace bind1 bind2 assum subst t1 t2
+      do TypeVar u' <- mkTypeVar
+         (b, subst') <- sub trace bind1 bind2 assum subst (rename u' u t1) t2
+         return (b, subst')
     sub trace bind1 bind2 assum subst t1 (Forall u t2) =
-      sub trace bind1 bind2 assum subst t1 t2
+      do TypeVar u' <- mkTypeVar
+         (b, subst') <- sub trace bind1 bind2 assum subst t1 (rename u' u t2)
+         return (b, subst')
     sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
       case follow subst t2 of
-        TypeVar u -> return (True, Map.insert u t1 subst)
+        TypeVar u -> do
+          return (True, Map.insert u (follow subst t1) subst)
         ty -> sub trace bind1 bind2 assum subst t1 ty
     sub trace bind1 bind2 assum subst t1@(TypeVar u) t2 =
       case follow subst t1 of
-        TypeVar u -> return (True, Map.insert u t2 subst)
+        TypeVar u -> do
+          return (True, Map.insert u (follow subst t2) subst)
         ty -> sub trace bind1 bind2 assum subst ty t2
     sub trace bind1 bind2 assum subst (Name s1 tys1) (Name s2 tys2) =
       case Map.lookup (s1, s2) assum of
@@ -87,8 +93,8 @@ subtype t1 t2 env argOrd subst =
               ty2 = lookup bind2 env s2
               vars1 = List.map (variance env argOrd ty1) (Map.keys bind1)
               vars2 = List.map (variance env argOrd ty2) (Map.keys bind2)
-          (b1, subst') <- foldM f (True, subst) (List.zip3 tys1 tys1' vars1)
-          foldM f (b1, subst') (List.zip3 tys1 tys1' vars1)
+          (b1, subst') <- foldM f (True, subst) (List.zip3 tys1' tys2' vars1)
+          foldM f (b1, subst') (List.zip3 tys1' tys2' vars1)
         Nothing
           | s1 == s2 && Map.notMember s1 bind1 && Map.notMember s2 bind2 ->
             let ty = env ! s1
@@ -139,8 +145,8 @@ subtype t1 t2 env argOrd subst =
       (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
       return (b1 || b2, subst'')
     sub trace bind1 bind2 assum subst (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst tDom2 tDom1
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod1 tCod2
+      (b1, subst') <- sub trace bind1 bind2 assum subst tDom1 tDom2
+      (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod2 tCod1
       return (b1 && b2, subst'')
     sub trace bind1 bind2 assum subst (Tuple [t1]) t2 =
       sub trace bind1 bind2 assum subst t1 t2
@@ -154,10 +160,10 @@ subtype t1 t2 env argOrd subst =
             f (False, subst) _ = return (False, subst)
     sub trace bind1 bind2 assum subst (Array t1) (Array t2) =
       sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Record _ fields1) (Record b fields2) =
+    sub trace bind1 bind2 assum subst (Record _ fields1) (Record _ fields2) =
       foldM f (True, subst) fields1
       where f :: (Bool, Substitution) -> (String, Type) -> IO (Bool, Substitution)
-            f (b, subst) (name, ty) =
+            f (_, subst) (name, ty) =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
               Nothing -> return (False, subst)

@@ -57,7 +57,7 @@ instance Show Fragment where
 
 instance (Show Stmt) where
   show = ppIR
-  
+
 ppIR :: Stmt -> String
 ppIR stmt = evalState (ppStmt stmt) 0
 

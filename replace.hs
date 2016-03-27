@@ -154,10 +154,13 @@ replaceExpr subst (te, ty) =
   where ty' = replaceType subst ty
 
 replaceLValueExpr subst (tlve, ty) =
-  let replace (TVarExpr s, ty) = (TVarExpr s, ty')
+  let replace (TVarExpr s, ty) =
+        let ty' = replaceType subst ty
+        in (TVarExpr s, ty')
       replace (TFieldAccessExpr tlve s, ty) =
-        (TFieldAccessExpr (replace tlve) s, ty')
+        let ty' = replaceType subst ty
+        in (TFieldAccessExpr (replace tlve) s, ty')
       replace (TArrayAccessExpr tlve te, ty) =
-        (TArrayAccessExpr (replace tlve) (replaceExpr subst te), ty')
+        let ty' = replaceType subst ty
+        in (TArrayAccessExpr (replace tlve) (replaceExpr subst te), ty')
   in replace (tlve, ty)
-  where ty' = replaceType subst ty

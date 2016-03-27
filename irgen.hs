@@ -13,8 +13,17 @@ import Control.Arrow
 import Data.Bool
 import qualified Data.List as List
 import qualified Data.Map as Map
+import qualified Data.Tree as Tree
 import Data.Map(Map, (!))
+import Data.Tree(Tree, Forest)
 import Control.Monad.State.Lazy
+import qualified Debug.Trace as Debug
+
+drawTree :: Show a => Tree a -> String
+drawTree t = Tree.drawTree (fmap show t)
+
+drawForest :: Show a => Forest a -> String
+drawForest = unlines . List.map drawTree
 
 data Frame = Frame { stack :: Int
                    , closure :: Int }
@@ -22,7 +31,7 @@ data Frame = Frame { stack :: Int
 data Access = StackLocal Type Int
             | ClosureLocal Type Int
             | FunctionParam Type Int
-             
+
 data IRGenState = IRGenState { stringmap :: Map String UniqString
                              , fragmap :: Map UniqString Fragment
                              , frame :: Frame
@@ -64,11 +73,11 @@ closureAlloc ty n =
   do fr <- gets frame
      modify (\x -> x { frame = (frame x) { closure = closure (frame x) + n } })
      return $ ClosureLocal ty (closure fr)
-     
+
 heapAlloc :: Type -> Int -> IR.TExpr
 heapAlloc ty n =
   (IR.Call (IR.Name (UniqString "malloc"), IntType) [intConst n], ty)
-        
+
   
 uniq :: String -> IRGenM UniqString
 uniq s = liftM (UniqString . (s ++) . show) (io unique)
@@ -83,16 +92,16 @@ eseq :: [Stmt] -> IR.TExpr -> IR.TExpr
 eseq stmt texpr@(expr, ty) = (SeqExpr (seq stmt) texpr, ty)
 
 irGen :: Env -> [TypedDecl] -> IO [Fragment]
-irGen env ast = execStateT (mapM (declGen env) ast)
-                           (IRGenState { stringmap = Map.empty
-                                       , fragmap = Map.empty
-                                       , frame = Frame { stack = 0
-                                                       , closure = 0 }
-                                       , venv = Map.empty
-                                       , breakLabel = Nothing
-                                       , contLabel = Nothing
-                                       , endLabel = Nothing
-                                       }) >>= return . Map.elems . fragmap
+irGen env ast = execStateT (mapM (declGen env) ast) initGenState
+                  >>= return . Map.elems . fragmap
+  where initGenState = IRGenState { stringmap = Map.empty
+                                  , fragmap = Map.empty
+                                  , frame = Frame { stack = 0
+                                                  , closure = 0 }
+                                  , venv = Map.empty
+                                  , breakLabel = Nothing
+                                  , contLabel = Nothing
+                                  , endLabel = Nothing }
 
 declGen :: Env -> TypedDecl -> IRGenM ()
 declGen env (TTypeDecl name args ty) = return ()
@@ -101,9 +110,9 @@ declGen env (TFunDecl name tyargs args ty stmt) =
      retname <- uniq (name ++ "ret")
      modify (insertName name uname)
      modify (updateEndLabel retname)
-     stmt <- stmtGen env stmt
+     stmt' <- stmtGen env stmt
      Just endLab <- gets endLabel
-     modify (insertFrag uname (ProcFrag uname ty (Seq stmt (Label retname))))
+     modify (insertFrag uname (ProcFrag uname ty (Seq stmt' (Label retname))))
 
 if_ :: View -> IR.Stmt -> IR.Stmt -> IRGenM IR.Stmt
 if_ mtest then_ else_ =
@@ -124,7 +133,7 @@ intConst n = (IntConst n, IntType)
 simpleVar :: Access -> IR.TExpr
 simpleVar (StackLocal ty offs) =
   (Mem (BinOp Plus (fp IntType)
-                          (intConst offs), ty), ty)
+                   (intConst offs), ty), ty)
 simpleVar (FunctionParam ty num) =
   (IR.Name (UniqString ("t" ++ show num)), ty)
 simpleVar (ClosureLocal ty offs) =
@@ -173,16 +182,6 @@ rv ty = (RV, ty)
 fp :: Type -> IR.TExpr
 fp ty = (FP, ty)
 
-return_ :: [IR.View] -> IRGenM IR.Stmt
-return_ views =
-  mapM unEx views >>= \exprs ->
-  let types = List.map typeOf exprs
-      rvs = map rv types
-      dsts = List.zip (List.zipWith (BinOp Plus) rvs offsets) types
-  in gets endLabel >>= \(Just endLab) ->
-        return $ seq (List.zipWith IR.Move dsts exprs ++ [Jump endLab])
- where offsets = List.map intConst [0..]
- 
 false :: IR.TExpr
 false = (IntConst 0, BoolType)
 
@@ -191,6 +190,20 @@ true = (IntConst 1, BoolType)
 
 emptyStmt :: Monad m => m Stmt
 emptyStmt = return $ ExprStmt false
+
+return_ :: [IR.TExpr] -> IRGenM IR.Stmt
+return_ exprs =
+  let types = List.map typeOf exprs
+      rvs = map rv types
+      dsts = List.zip (List.zipWith (BinOp Plus) rvs offsets) types
+  in gets endLabel >>= \(Just endLab) ->
+        return $ seq (List.zipWith IR.Move dsts exprs ++ [Jump endLab])
+ where offsets = List.map intConst [0..]
+
+assign :: Forest IR.TExpr -> [IR.TExpr] -> IRGenM IR.Stmt
+assign vars exprs = error ("\n" ++ show vars) --return . seq . List.map (uncurry doAssign) $ List.zip vars exprs
+  where doAssign :: Tree IR.TExpr -> IR.TExpr -> IR.Stmt
+        doAssign (Tree.Node e forests) rhs = error "TODO: 14.3 in Appel"
 
 stmtGen :: Env -> TypedStatement -> IRGenM IR.Stmt
 stmtGen env (TIfStatement testExpr thenStmt elseStmt) =
@@ -209,9 +222,11 @@ stmtGen env TBreakStatement =
 stmtGen env TContinueStatement =
   gets contLabel >>= return . Jump . fromJust
 stmtGen env (TReturnStatement expr) =
-  exprGen env expr >>= return_
+  exprGen env expr >>= mapM unEx >>= return_
 stmtGen env (TAssignStatement (Left mexpr) expr) =
-  undefined
+  matchExprGen env mexpr >>= \varmap ->
+  exprGen env expr >>=
+  mapM unEx >>= assign varmap
 
 returnEx :: IR.TExpr -> IRGenM View
 returnEx = return . Ex
@@ -240,32 +255,45 @@ exprGen env (TTupleExpr exprs, ty) =
 exprGen env (TListExpr exprs, Array ty) =
   concatMapM (exprGen env) exprs >>= \views ->
   mapM unEx views >>= \exprs ->
-  liftM simpleVar (stackAlloc ty 1) >>= \dstExpr ->
+  liftM simpleVar (stackAlloc ty 1) >>= \dst ->
   let n = List.length views
       alloc = heapAlloc ty (n+1)
-      moves_ = moves dstExpr [intConst offs | offs <- [0..]]
-                             (intConst n : exprs)
-  in returnExs [(SeqExpr (Seq (IR.Move dstExpr alloc) moves_) dstExpr,
-                 typeOf dstExpr)]
+      moves_ = moves dst [intConst offs | offs <- [0..]]
+                         (intConst n : exprs)
+  in returnExs [(SeqExpr (Seq (IR.Move dst alloc) moves_) dst, typeOf dst)]
 exprGen env (TBangExpr expr, ty) =
   exprGen env expr >>= \[view] ->
   unEx view >>= \expr' ->
   returnExs [(BinOp Minus (intConst 1) expr', ty)]
 
+
 lookupm :: Ord k => Maybe k -> Map k a -> Maybe a
 lookupm key map = join $ liftM (flip Map.lookup map) key
-     
-matchExprGen :: Env -> TypedMatchExpr -> IRGenM (Map String IR.TExpr)
+
+matchExprGen :: Env -> TypedMatchExpr -> IRGenM (Forest IR.TExpr)
 matchExprGen env (TVarMatch s, ty) =
-  gets venv >>= \venv ->
-    gets stringmap >>= \stringmap ->
-      case lookupm (Map.lookup s stringmap) venv of
-        Just frag -> return $ Map.singleton s (simpleVar frag)
-        Nothing ->
-          uniq s >>= \us ->
-          modify (insertName s us) >>
-          stackAlloc ty 1 >>= \frag ->
-          modify (insertVar us frag) >>
-          return (Map.singleton s (simpleVar frag))
+  do venv_ <- gets venv
+     stringmap_ <- gets stringmap
+     case lookupm (Map.lookup s stringmap_) venv_ of
+       Just frag -> return [Tree.Node (simpleVar frag) []]
+       Nothing -> do
+         us <- uniq s
+         modify (insertName s us)
+         frag <- stackAlloc ty 1
+         modify (insertVar us frag)
+         return [Tree.Node (simpleVar frag) []]
 matchExprGen env (TTupleMatchExpr mexprs, ty) =
-  mapM (matchExprGen env) mexprs >>= return . Map.unions
+  mapM (matchExprGen env) mexprs >>= return . List.concat
+matchExprGen env (TIntMatchExpr n, ty) =
+  return [Tree.Node (IntConst n, ty) []]
+matchExprGen env (TStringMatchExpr s, ty) =
+  do key <- uniq "string"
+     modify (insertFrag key (StringFrag s))
+     return [Tree.Node (IR.Name key, ty) []]
+matchExprGen env (TBoolMatchExpr b, ty)
+  | b         = return [Tree.Node (IntConst 1, ty) []]
+  | otherwise = return [Tree.Node (IntConst 0, ty) []]
+matchExprGen env (TListMatchExpr mexprs, ty) =
+  mapM (matchExprGen env) mexprs >>= return . List.concat
+matchExprGen env (TRecordMatchExpr fields, ty) =
+  undefined --mapM (second (matchExprGen env)) fields >>= error "TODO: 14.3 in Appel"

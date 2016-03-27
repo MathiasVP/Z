@@ -1,8 +1,9 @@
 import Parser as P
 import qualified TypeInfer as T
 import qualified IRGen as IR
-import Control.Monad.Trans.Writer.Lazy
+import qualified InferFieldOffsets as IFO
 import qualified Data.List as List
+import Text.Groom
 
 main :: IO ()
 main = let path = "../test.z"
@@ -11,5 +12,9 @@ main = let path = "../test.z"
                Left err -> print err
                Right ast -> do
                  (typed, env, subst) <- T.infer ast
-                 ir <- IR.irGen env typed
-                 print ir
+                 let fieldMap = IFO.construct env typed
+                 putStrLn (groom typed)
+                 putStrLn (groom env)
+                 putStrLn (groom subst)
+                 --ir <- IR.irGen env typed
+                 --print ir

@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 module TypeInfer where
+import Data.Foldable
 import Control.Monad
 import Control.Monad.State.Lazy
 import qualified Data.List as List
@@ -9,6 +10,7 @@ import Data.Maybe
 import Data.Bool
 import Data.Set (Set)
 import Data.Map (Map)
+import Text.Groom
 
 import Types
 import TypedAst
@@ -66,16 +68,15 @@ infer decls = do
       -- retTy = Just t -> retTy' = t
       retTy' <- fromMaybe mkTypeVar (liftM return retTy)
       let types = List.map snd args'
-          functionTy = List.foldr (makeForall subst') (makeArrow types retTy') types
-          env'' = Map.insert name functionTy env'
+      functionTy <- foldrM (makeForall subst') (makeArrow types retTy') types
+      let env'' = Map.insert name functionTy env'
       (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
-      (b, subst'''') <- subtype infRetTy retTy' env'' argOrd'' subst'''
+      (b, subst'''') <- subtype retTy' infRetTy env'' argOrd'' subst'''
       case b of
         True ->
-          let functionTy' = List.foldr (makeForall subst'''')
-                                       (makeArrow types retTy') types
-          in return (TFunDecl name tyArgs args' retTy' statement',
+          do functionTy' <- foldrM (makeForall subst'''') (makeArrow types retTy') types
+             return (TFunDecl name tyArgs args' retTy' statement',
                      Map.insert name functionTy' env, argOrd, subst'''')
         False -> do
           putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
@@ -493,16 +494,14 @@ infer decls = do
     inferLValueExpr tm (FieldAccessExpr lve field) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst
       case tm of
-        Just t -> do -- Writing to variable
-          (_, subst'') <- unify (typeOf lve') (Record False [(field, t)]) env argOrd subst'
-          return ((TFieldAccessExpr lve' field, t), env', subst'')
+        Just t -> --Writing to variable
+          let subst'' = extendRecord field t (typeOf lve') subst'
+          in return ((TFieldAccessExpr lve' field, t), env', subst'')
         Nothing -> do -- Reading from variable
           u <- mkTypeVar
           (b, subst'') <- subtype (Record True [(field, u)]) (typeOf lve') env' argOrd subst'
           case b of
-            True ->
-              let subst''' = extendRecord field u (typeOf lve') subst''
-              in return ((TFieldAccessExpr lve' field, u), env', subst''')
+            True -> return ((TFieldAccessExpr lve' field, u), env', subst'')
             False -> do
               putStrLn $ "'" ++ field ++ "' is not a field of type '" ++ show (typeOf lve') ++ "'"
               return ((TFieldAccessExpr lve' field, Error), env, subst)

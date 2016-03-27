@@ -50,7 +50,7 @@ funDecl = withPos $ do
     sameOrIndented
     s <- block statement
     spaces
-    fundecls <- many (funDeclWithName name)
+    --fundecls <- many (funDeclWithName name) --TODO: ML style function level pattern matching
     return $ FunDecl name (fromMaybe [] typevarsM) args typeM (makeCompound s)
 
 funDeclWithName :: String -> IParser (String, [String], [MatchExpr], Maybe Type, Statement)

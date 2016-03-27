@@ -55,7 +55,7 @@ unify t1 t2 env argOrd subst =
           uni trace bind1 bind2 t t' subst
     uni trace bind1 bind2 (Forall u t1) t2 subst = do
       (ty, subst') <- uni trace bind1 bind2 t1 t2 subst
-      return (Forall u ty, subst')
+      return (ty, subst')
     uni trace bind1 bind2 t1 (Forall u t2) subst =
       uni trace bind1 bind2 (Forall u t2) t1 subst
     uni trace bind1 bind2 (TypeVar u) t subst =
@@ -160,7 +160,7 @@ unify' t1 t2 env argOrd subst =
         (t, t') -> uni' trace bind1 bind2 t t' subst
     uni' trace bind1 bind2 (Forall u t1) t2 subst = do
       uni' trace bind1 bind2 t1 t2 subst >>= \case
-        Just (ty, subst') -> return $ Just (Forall u ty, subst')
+        Just (ty, subst') -> return $ Just (ty, subst')
         Nothing -> return Nothing
     uni' trace bind1 bind2 t1 (Forall u t2) subst =
       uni' trace bind1 bind2 (Forall u t2) t1 subst

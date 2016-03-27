@@ -1,6 +1,7 @@
 module Types where
 import qualified Data.List as List
 import qualified Data.Map as Map
+import Data.Foldable
 import Unique
 
 data Type
@@ -19,8 +20,8 @@ data Type
   | Intersect Type Type
   | TypeVar UniqueInt
   | Error
-    deriving (Eq, Ord)
-
+    deriving (Eq, Ord, Show)
+{-
 instance Show Type where
   show IntType = "Int"
   show BoolType = "Bool"
@@ -50,7 +51,7 @@ instance Show Type where
   show (Forall u ty) = "forall " ++ show u ++ ". " ++ show ty
   show (TypeVar u) = show u
   show Error = "Error"
-  
+-}
 -------------------------------------------------------
 -- Type simplications
 -------------------------------------------------------

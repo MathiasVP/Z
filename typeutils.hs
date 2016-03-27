@@ -1,7 +1,10 @@
+{-# LANGUAGE TupleSections #-}
+
 module TypeUtils where
 import Data.Map (Map)
 import Control.Monad
 import Data.Ord
+import Data.Foldable
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
@@ -99,15 +102,49 @@ typevars (Forall u ty) =
   where uniques = typevars ty
 typevars (Arrow t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars (Union t1 t2) = List.nub $ typevars t1 ++ typevars t2
-typevars (Tuple tys) = List.nub $ concatMap typevars tys
-typevars (Record _ fields) = List.nub $ concatMap typevars (List.map snd fields)
+typevars (Tuple tys) = List.nub $ List.concatMap typevars tys
+typevars (Record _ fields) = List.nub $ List.concatMap typevars (List.map snd fields)
 typevars (Array ty) = typevars ty
 typevars (Intersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars _ = []
 
-makeForall :: Substitution -> Type -> Type -> Type
+isQuantified :: Substitution -> UniqueInt -> Type -> Bool
+isQuantified subst u ty = isQuant ty
+  where
+    isQuant (Forall u' ty)
+      | follow subst (TypeVar u') == follow subst (TypeVar u) =
+        True
+      | otherwise = isQuant ty
+    isQuant (Arrow t1 t2) = isQuant t1 || isQuant t2
+    isQuant (Union t1 t2) = isQuant t1 || isQuant t2
+    isQuant (Tuple tys) = List.any isQuant tys
+    isQuant (Record _ fields) = List.any (isQuant . snd) fields
+    isQuant (Array ty) = isQuant ty
+    isQuant (Intersect t1 t2) = isQuant t1 || isQuant t2
+    isQuant _ = False
+
+rename :: UniqueInt -> UniqueInt -> Type -> Type
+rename new old ty =
+  let re (Name s tys) = Name s (List.map re tys)
+      re (Forall u ty) = Forall u (re ty)
+      re (Arrow tDom tCod) = Arrow (re tDom) (re tCod)
+      re (Union t1 t2) = union (re t1) (re t2)
+      re (Tuple tys) = Tuple (List.map re tys)
+      re (Record b fields) = Record b (List.map (\(s, ty) -> (s, re ty)) fields)
+      re (Array ty) = Array (re ty)
+      re (TypeVar u)
+        | u == old = TypeVar new
+        | otherwise = TypeVar u
+      re (Intersect t1 t2) = intersect (re t1) (re t2)
+      re t = t
+  in re ty
+  
+makeForall :: Substitution -> Type -> Type -> IO Type
 makeForall subst ty1 ty2 =
-  List.foldr make ty2 (typevars (follow subst ty1))
+  foldrM make ty2 (typevars (follow subst ty1))
   where make u ty
-          | List.elem u (typevars ty) = ty
-          | otherwise                 = Forall u ty
+          | isQuantified subst u ty ||
+            not (free (TypeVar u) subst) = return (follow subst ty)
+          | otherwise =
+            do TypeVar u' <- mkTypeVar
+               return $ Forall u' (rename u' u (follow subst ty))
