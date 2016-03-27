@@ -439,8 +439,6 @@ infer decls = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
       tCod <- mkTypeVar
-      print (typeOf f')
-      print (Arrow (typeOf arg') tCod)
       subtype (typeOf f') (Arrow (typeOf arg') tCod) env'' argOrd'' subst'' >>= \case
         (True, subst''') ->
           return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')

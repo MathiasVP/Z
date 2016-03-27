@@ -294,5 +294,4 @@ unify' t1 t2 env argOrd subst =
                 Just (t, subst') -> return $ Just (t : types, subst')
                 Nothing -> return Nothing
             f _ Nothing = return Nothing
-
   in uni' Set.empty Map.empty Map.empty t1 t2 subst

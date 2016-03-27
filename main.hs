@@ -14,7 +14,6 @@ main = let path = "../test.z"
                  (typed, env, subst) <- T.infer ast
                  let fieldMap = IFO.construct env typed
                  putStrLn (groom typed)
-                 putStrLn (groom env)
-                 putStrLn (groom subst)
+                 putStrLn (groom fieldMap)
                  --ir <- IR.irGen env typed
                  --print ir

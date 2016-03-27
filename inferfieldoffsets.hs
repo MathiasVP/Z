@@ -9,32 +9,37 @@ import TypeUtils
 import Control.Arrow
 import qualified Data.List as List
 import Data.Map(Map)
+import Data.Set(Set)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Control.Monad.State.Lazy
 import Data.Traversable hiding(mapM)
 import Control.Applicative hiding(empty)
+import qualified Debug.Trace as Debug
 
 newtype Var = Var Int
-  deriving Show
+  deriving (Show, Ord, Eq)
 
 type FieldMapEntry = Map String Var
 newtype FieldMap = FieldMap (Map Type FieldMapEntry)
   deriving Show
 
-type ST = (Var, FieldMap)
+newtype Equalities = Equalities (Set (Var, Var))
+  deriving Show
+  
+type ST = (Var, FieldMap, Equalities)
 
 lookup :: Type -> FieldMap -> Maybe FieldMapEntry
 lookup ty (FieldMap fm) = Map.lookup ty fm
 
-insertEntry :: Type -> String -> State ST ()
-insertEntry ty s =
+insertEntry :: (Var -> State ST ()) ->
+               Type -> String -> State ST ()
+insertEntry hit ty s =
   gets fieldmap >>= return . lookup ty >>= \case
-       Nothing -> freshVar >>= add ty s
        Just entry ->
          case Map.lookup s entry of
-           Nothing -> freshVar >>= add ty s
-           Just var -> return ()
-  where fieldmap = snd
+           Just var -> hit var
+  where fieldmap (_, fm, _)= fm
            
 insert :: Type -> FieldMapEntry -> FieldMap -> FieldMap
 insert t e (FieldMap fm) = FieldMap (Map.insert t e fm)
@@ -43,12 +48,17 @@ add :: Type -> String -> Var -> State ST ()
 add ty s e =
   modify . second $ \fm ->
     case lookup ty fm of
-     Just fields -> insert ty (Map.insert s e fields) fm
+     Just fields ->
+      case Map.lookup s fields of
+        Just e' -> fm
+        Nothing -> insert ty (Map.insert s e fields) fm
      Nothing -> insert ty (Map.singleton s e) fm
+  where second f (a, b, c) = (a, f b, c) 
 
-construct :: Env -> [TypedDecl] -> FieldMap
-construct env decls = snd $ execState (mapM visitDecl decls)
-                                      (Var 0, FieldMap Map.empty)
+construct :: Env -> [TypedDecl] -> (FieldMap, Equalities)
+construct env decls = (fm, eqs)
+  where (_, fm, eqs) = execState (mapM visitDecl decls)
+                     (Var 0, FieldMap Map.empty, Equalities Set.empty)
 
 visitDecl :: TypedDecl -> State ST ()
 visitDecl (TFunDecl _ _ args ty stmt) =
@@ -132,26 +142,26 @@ visitLValueExpr' (TArrayAccessExpr lve e) = visitLValueExpr lve >> visitExpr e
 
 freshVar :: State ST Var
 freshVar =
-  do var <- gets fst
-     modify (\(Var n, fm) -> (Var $ n+1, fm))
+  do var <- gets (\(vars, _, _) -> vars)
+     modify (\(Var n, fm, eqs) -> (Var $ n+1, fm, eqs))
      return var
 
-unionMapWithM_ :: (Monad m, Ord k) =>
-                  (k -> m ()) -> (k -> m ()) ->
-                    Map k a -> Map k a -> m ()
-unionMapWithM_ f g m1 m2 =
-  forM_ (Map.toList m1) $ \(k, _) ->
-    case Map.lookup k m2 of
-      Just y -> f k
-      Nothing -> g k
+equality :: Var -> Var -> Equalities -> Equalities
+equality v1 v2 (Equalities eqs) = Equalities $ Set.insert (v1, v2) eqs
+     
+addEquality :: Var -> Var -> State ST ()
+addEquality v1 v2 = modify (\(vars, fm, eqs) -> (vars, fm, equality v1 v2 eqs))
 
 unify :: Type -> Type -> State ST ()
 unify r1@(Record _ fields1) r2@(Record _ fields2) =
-  unionMapWithM_
-    (\s -> insertEntry r1 s >> insertEntry r2 s)
-    (\s -> insertEntry r1 s)
-    (Map.fromList fields1) (Map.fromList fields2)
-
+  forM_ fields1 $ \(k, _) ->
+    case List.lookup k fields2 of
+      Just _ ->
+        freshVar >>= \var ->
+        insertEntry (addEquality var) r1 k >>
+        insertEntry (addEquality var) r2 k
+      Nothing ->
+        insertEntry (const $ return ()) r1 k
 
 records :: Type -> [Type]
 records ty@(Record _ _) = [ty]
