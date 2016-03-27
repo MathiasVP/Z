@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
-module Unique(unique, UniqueInt) where
+module Unique(unique, UniqueInt(UniqueInt)) where
 import Data.IORef
 import Data.Global
 import Data.Typeable

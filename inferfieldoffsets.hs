@@ -1,6 +1,6 @@
 {-# LANGUAGE TupleSections, LambdaCase #-}
 
-module InferFieldOffsets where
+module InferFieldOffsets(construct) where
 
 import Prelude hiding (lookup)
 import Types
@@ -28,30 +28,23 @@ lookup ty (FieldMap fm) = Map.lookup ty fm
 
 insertEntry :: Type -> String -> State ST ()
 insertEntry ty s =
-  fieldMap >>= return . lookup ty >>= \case
+  gets fieldmap >>= return . lookup ty >>= \case
        Nothing -> freshVar >>= add ty s
        Just entry ->
          case Map.lookup s entry of
            Nothing -> freshVar >>= add ty s
            Just var -> return ()
-
+  where fieldmap = snd
+           
 insert :: Type -> FieldMapEntry -> FieldMap -> FieldMap
 insert t e (FieldMap fm) = FieldMap (Map.insert t e fm)
 
-putFieldMap :: FieldMap -> State ST ()
-putFieldMap fm =
-  gets fst >>= put . (, fm) >> return ()
-
 add :: Type -> String -> Var -> State ST ()
 add ty s e =
-  do fm <- fieldMap
-     let fm' = case lookup ty fm of
-                 Just fields -> insert ty (Map.insert s e fields) fm
-                 Nothing -> insert ty (Map.singleton s e) fm
-     putFieldMap fm'
-
-fieldMap :: State ST FieldMap
-fieldMap = gets snd
+  modify . second $ \fm ->
+    case lookup ty fm of
+     Just fields -> insert ty (Map.insert s e fields) fm
+     Nothing -> insert ty (Map.singleton s e) fm
 
 construct :: Env -> [TypedDecl] -> FieldMap
 construct env decls = snd $ execState (mapM visitDecl decls)
@@ -137,14 +130,12 @@ visitLValueExpr' (TVarExpr _) = return ()
 visitLValueExpr' (TFieldAccessExpr lve _) = visitLValueExpr lve
 visitLValueExpr' (TArrayAccessExpr lve e) = visitLValueExpr lve >> visitExpr e
 
-visitTypes = mapM_ visitType
-
 freshVar :: State ST Var
 freshVar =
   do var <- gets fst
      modify (\(Var n, fm) -> (Var $ n+1, fm))
      return var
-  
+
 unionMapWithM_ :: (Monad m, Ord k) =>
                   (k -> m ()) -> (k -> m ()) ->
                     Map k a -> Map k a -> m ()
@@ -194,3 +185,6 @@ visitType (Union ty1 ty2) =
     in mapM_ (uncurry unify) recs
 visitType (Intersect ty1 ty2) = visitType ty1 >> visitType ty2
 visitType (TypeVar uint) = return ()
+
+visitTypes :: [Type] -> State ST ()
+visitTypes = mapM_ visitType

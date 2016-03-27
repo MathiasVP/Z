@@ -43,7 +43,7 @@ funDecl = withPos $ do
     spaces'
     args <- sepBy1 matchExpr spaces'
     spaces'
-    typeM <- optionMaybe $ string "->" >> spaces' >> type_
+    typeM <- optionMaybe $ try $ string "=>" >> spaces' >> type_
     spaces'
     char '='
     spaces
@@ -152,7 +152,7 @@ nameType = do
             else Nothing
     tys <- option [] (char '<' >> sepBy1 type_ (spaces' >> char ',' >> spaces') <* char '>')
     spaces'
-    return $ fromMaybe (Name name tys) t
+    return $ fromMaybe (Name (placeholder name) tys) t
 
 arrowType :: IParser Type
 arrowType = chainr1 simpleType arrow

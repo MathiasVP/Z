@@ -1,4 +1,5 @@
 module Subtype (subtype) where
+import Prelude hiding (lookup)
 import Control.Monad
 import Data.Map (Map)
 import Data.Map ((!))
@@ -38,15 +39,15 @@ variance env argOrd t s =
   let var trace v (Name s' tys)
         | Set.member s' trace = v
         | otherwise =
-          case Map.lookup s' env of
-            Just ty ->
-              let order = argOrd ! s'
+          case Map.lookup (stringOf s') env of
+            Just (_, ty) ->
+              let order = argOrd ! (stringOf s')
                   names = List.map (order !) [0..]
                   ty' = instansiates ty (Map.fromList (List.zip names tys))
               in var (Set.insert s' trace) v ty'
             Nothing
-              | s == s'   -> lub v Positive
-              | otherwise -> v
+              | s == stringOf s'   -> lub v Positive
+              | otherwise          -> v
       var trace v (Arrow t1 t2) =
         lub (invert (var trace v t1)) (var trace v t2)
       var trace v (Forall u ty) = var trace v ty
@@ -58,16 +59,23 @@ variance env argOrd t s =
       var trace v _ = v
   in var Set.empty Bottom t  
   
+lookup :: Bindings -> Env -> Identifier -> Type
+lookup bind env s =
+  case Map.lookup (stringOf s) env of
+    Just (_, ty) -> ty
+    Nothing -> bind ! (stringOf s)
+  
 subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Bool, Substitution)
 subtype t1 t2 env argOrd subst =
   let
-    lookup bind env s = Map.findWithDefault (bind ! s) s env
-    
     updateOrElse f def k map =
       case Map.lookup k map of
         Just a -> Map.insert k (f a) map
         Nothing -> Map.insert k def map
     
+    sub :: Map Identifier Int -> Bindings -> Bindings ->
+             Map (Identifier, Identifier) ([Type], [Type]) ->
+               Substitution -> Type -> Type -> IO (Bool, Substitution)
     sub trace bind1 bind2 assum subst (Forall u t1) t2 =
       do TypeVar u' <- mkTypeVar
          (b, subst') <- sub trace bind1 bind2 assum subst (rename u' u t1) t2
@@ -96,8 +104,9 @@ subtype t1 t2 env argOrd subst =
           (b1, subst') <- foldM f (True, subst) (List.zip3 tys1' tys2' vars1)
           foldM f (b1, subst') (List.zip3 tys1' tys2' vars1)
         Nothing
-          | s1 == s2 && Map.notMember s1 bind1 && Map.notMember s2 bind2 ->
-            let ty = env ! s1
+          | s1 == s2 && Map.notMember (stringOf s1) bind1 &&
+            Map.notMember (stringOf s2) bind2 ->
+            let (_, ty) = env ! (stringOf s1)
                 vars = List.map (variance env argOrd ty) (Map.keys bind1)
             in foldM f (True, subst) (List.zip3 tys1 tys2 vars)
           | otherwise ->
@@ -143,7 +152,7 @@ subtype t1 t2 env argOrd subst =
     sub trace bind1 bind2 assum subst ty (Union t1 t2) = do
       (b1, subst') <- sub trace bind1 bind2 assum subst ty t1
       (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
-      return (b1 || b2, subst'')
+      return (b1 && b2, subst'')
     sub trace bind1 bind2 assum subst (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) = do
       (b1, subst') <- sub trace bind1 bind2 assum subst tDom1 tDom2
       (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod2 tCod1
@@ -160,13 +169,13 @@ subtype t1 t2 env argOrd subst =
             f (False, subst) _ = return (False, subst)
     sub trace bind1 bind2 assum subst (Array t1) (Array t2) =
       sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Record _ fields1) (Record _ fields2) =
+    sub trace bind1 bind2 assum subst (Record _ fields1) (Record mut2 fields2) =
       foldM f (True, subst) fields1
       where f :: (Bool, Substitution) -> (String, Type) -> IO (Bool, Substitution)
             f (_, subst) (name, ty) =
              case List.lookup name fields2 of
               Just ty' -> sub trace bind1 bind2 assum subst ty ty'
-              Nothing -> return (False, subst)
+              Nothing -> return (mut2, subst)
     sub trace bind1 bind2 assum subst (Intersect t1 t2) ty = do
       (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
       (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty

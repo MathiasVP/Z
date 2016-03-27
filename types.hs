@@ -4,13 +4,31 @@ import qualified Data.Map as Map
 import Data.Foldable
 import Unique
 
+newtype Identifier = Identifier (String, UniqueInt)
+  deriving (Eq, Ord, Show)
+  
+stringOf :: Identifier -> String
+stringOf (Identifier (s, _)) = s
+
+idOf :: Identifier -> UniqueInt
+idOf (Identifier (_, u)) = u
+
+identifier :: String -> UniqueInt -> Identifier
+identifier s u = Identifier (s, u)
+
+fromString :: String -> IO Identifier
+fromString s = unique >>= \u -> return (Identifier (s, u))
+
+placeholder :: String -> Identifier
+placeholder s = Identifier (s, UniqueInt (-1))
+
 data Type
   = IntType
   | BoolType
   | StringType
   | RealType
 
-  | Name String [Type]
+  | Name Identifier [Type]
   | Array Type
   | Tuple [Type]
   | Record Bool [(String, Type)]

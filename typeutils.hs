@@ -13,7 +13,7 @@ import Types
 import Unique
 
 type Substitution = Map UniqueInt Type
-type Env = Map String Type
+type Env = Map String (UniqueInt, Type)
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
 
@@ -62,16 +62,16 @@ free ty subst =
     TypeVar _ -> True
     _         -> False
     
-makeBindings :: ArgOrd -> String -> [Type] -> Bindings
+makeBindings :: ArgOrd -> Identifier -> [Type] -> Bindings
 makeBindings argOrd s types =
-  case Map.lookup s argOrd of
+  case Map.lookup (stringOf s) argOrd of
     Just argOrd -> Map.fromList $ List.zip (Map.elems argOrd) types
     Nothing -> Map.empty
 
 instansiate :: String -> Type -> Type -> Type
 instansiate name ty t =
   let inst (Name s [])
-        | s == name = ty
+        | stringOf s == name = ty
         | otherwise = Name s []
       inst (Name s tys) = Name s (List.map inst tys)
       inst (Forall u ty) = Forall u (inst ty)

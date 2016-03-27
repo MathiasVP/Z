@@ -106,9 +106,9 @@ irGen env ast = execStateT (mapM (declGen env) ast) initGenState
 declGen :: Env -> TypedDecl -> IRGenM ()
 declGen env (TTypeDecl name args ty) = return ()
 declGen env (TFunDecl name tyargs args ty stmt) =
-  do uname <- uniq name
-     retname <- uniq (name ++ "ret")
-     modify (insertName name uname)
+  do uname <- uniq (stringOf name)
+     retname <- uniq (stringOf name ++ "ret")
+     modify (insertName (stringOf name) uname)
      modify (updateEndLabel retname)
      stmt' <- stmtGen env stmt
      Just endLab <- gets endLabel

@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 module TypeInfer where
 import Data.Foldable
+import Control.Arrow
 import Control.Monad
 import Control.Monad.State.Lazy
 import qualified Data.List as List
@@ -43,24 +44,39 @@ mergeSubstitution env argOrd subst1 subst2 = foldlWithKeyM f subst1 subst2
 
 mergeEnv :: Env -> Env -> ArgOrd -> Substitution -> IO (Env, Substitution)
 mergeEnv env1 env2 argOrd subst = foldlWithKeyM f (env1, subst) env2
-  where f (env, subst) name ty =
+  where f (env, subst) name (id, ty) =
           case Map.lookup name env of
-            Nothing -> return (Map.insert name ty env, subst)
-            Just ty' -> do
+            Nothing -> return (Map.insert name (id, ty) env, subst)
+            Just (_, ty') -> do
               (ty'', subst') <- unify ty ty' env argOrd subst
-              return (Map.insert name ty'' env, subst')
+              return (Map.insert name (id, ty'') env, subst') --TODO: Or id matching ty'?
 
+emptyEnv :: Env
+emptyEnv = Map.empty
+              
+emptyArgOrd :: ArgOrd
+emptyArgOrd = Map.empty
+
+emptySubst :: Substitution
+emptySubst = Map.empty
+              
 infer :: [Decl] -> IO ([TypedDecl], Env, Substitution)
 infer decls = do
-  (typeddecls, env, _, subst) <- inferList inferDecl Map.empty Map.empty Map.empty decls
-  return (List.map (replaceDecl subst) typeddecls, Map.map (replaceType subst) env, subst)
+  (typeddecls, env, _, subst) <- inferList inferDecl emptyEnv emptyArgOrd
+                                   emptySubst decls
+  return (List.map (replaceDecl subst) typeddecls,
+          Map.map (second (replaceType subst)) env, subst)
   where
     extendArgOrd :: String -> [String] -> ArgOrd -> ArgOrd
     extendArgOrd name targs = Map.insert name (Map.fromList (List.zip [0..] targs))
 
     inferDecl :: Decl -> Env -> ArgOrd -> Substitution -> IO (TypedDecl, Env, ArgOrd, Substitution)
     inferDecl (TypeDecl name targs ty) env argOrd subst =
-      return (TTypeDecl name targs ty, Map.insert name ty env, extendArgOrd name targs argOrd, subst)
+      fromString name >>= \id ->
+        return (TTypeDecl id targs ty,
+                Map.insert name (idOf id, ty) env,
+                extendArgOrd name targs argOrd,
+                subst)
 
     inferDecl (FunDecl name tyArgs args retTy statement) env argOrd subst = do
       (args', env', argOrd', subst') <- inferList (inferMatchExpr Nothing) env argOrd subst args
@@ -68,21 +84,24 @@ infer decls = do
       -- retTy = Just t -> retTy' = t
       retTy' <- fromMaybe mkTypeVar (liftM return retTy)
       let types = List.map snd args'
-      functionTy <- foldrM (makeForall subst') (makeArrow types retTy') types
-      let env'' = Map.insert name functionTy env'
-      (statement', env''', argOrd'', subst'') <- inferStatement statement env'' argOrd' subst'
+      funTy <- foldrM (makeForall subst') (makeArrow types retTy') types
+      funId <- fromString name
+      let env'' = Map.insert name (idOf funId, funTy) env'
+      (statement', env''', argOrd'', subst'') <- inferStatement statement env''
+                                                   argOrd' subst'
       (infRetTy, subst''') <- mergeReturns statement' env''' argOrd subst''
       (b, subst'''') <- subtype retTy' infRetTy env'' argOrd'' subst'''
       case b of
         True ->
-          do functionTy' <- foldrM (makeForall subst'''') (makeArrow types retTy') types
-             return (TFunDecl name tyArgs args' retTy' statement',
-                     Map.insert name functionTy' env, argOrd, subst'''')
+          do funTy' <- foldrM (makeForall subst'''') (makeArrow types retTy') types
+             return (TFunDecl funId tyArgs args' retTy' statement',
+                     Map.insert name (idOf funId, funTy') env, argOrd, subst'''')
         False -> do
-          putStrLn $ "Error: Couldn't match expected return type '" ++ show retTy' ++
-                     "' with actual type '" ++ show infRetTy ++ "'."
-          return (TFunDecl name tyArgs args' retTy' statement',
-                  Map.insert name Error env, argOrd, subst)
+          putStrLn $ "Error: Couldn't match expected return type '" ++
+                     show retTy' ++ "' with actual type '" ++
+                     show infRetTy ++ "'."
+          return (TFunDecl funId tyArgs args' retTy' statement',
+                  Map.insert name (idOf funId, Error) env, argOrd, subst)
 
     commMaybeIO :: Maybe (IO (Maybe t)) -> IO (Maybe (Maybe t))
     commMaybeIO Nothing = return Nothing
@@ -147,7 +166,8 @@ infer decls = do
             where f (name, me) env argOrd subst = do
                     (me', env, argOrd', subst') <- inferMatchExpr Nothing me
                                                      env argOrd subst
-                    let env' = Map.insert name (typeOf me') env
+                    env' <- fromString name >>= \field ->
+                              return (Map.insert name (idOf field, typeOf me') env)
                     return ((name, me'), env', argOrd', subst')
       let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
       (recordTy, subst'') <- makeRecord env' argOrd' subst' False recordTypes
@@ -163,12 +183,19 @@ infer decls = do
           return (me', env, argOrd', subst)
 
     inferMatchExpr tm (VarMatch name) env argOrd subst =
-      case tm of
-        Just t ->
-          return ((TVarMatch name, t), Map.insert name t env, argOrd, subst)
-        Nothing -> do
-          t <- mkTypeVar
-          return ((TVarMatch name, t), Map.insert name t env, argOrd, subst)
+      do var <- case Map.lookup name env of
+                  Just (u, ty) -> return (identifier name u)
+                  Nothing -> fromString name
+         case tm of
+           Just t ->
+             return ((TVarMatch var, t),
+                     Map.insert name (idOf var, t) env,
+                     argOrd, subst)
+           Nothing -> do
+             t <- mkTypeVar
+             return ((TVarMatch var, t),
+                     Map.insert name (idOf var, t) env,
+                     argOrd, subst)
 
     inferMatchExpr tm (IntMatchExpr n) env argOrd subst =
       return ((TIntMatchExpr n, IntType), env, argOrd, subst)
@@ -278,10 +305,10 @@ infer decls = do
       return ((mkeExpr e1' e2', t), env2, argOrd2, subst')
 
     mkMathOpType e1 e2 env argOrd subst = do
-      (expectedType, subst') <- makeIntersect env argOrd subst IntType RealType
-      unify' (typeOf e1) expectedType env argOrd subst' >>= \case
+      (expType, subst') <- makeIntersect env argOrd subst IntType RealType
+      unify' (typeOf e1) expType env argOrd subst' >>= \case
         Just (t1, subst1) ->
-          unify' (typeOf e2) expectedType env argOrd subst1 >>= \case
+          unify' (typeOf e2) expType env argOrd subst1 >>= \case
             Just (t2, subst2) -> do
               unify' t1 t2 env argOrd subst2 >>= \case
                 Just (t, subst') -> return (t, subst')
@@ -291,11 +318,11 @@ infer decls = do
                   return (Error, subst)
             Nothing -> do
               putStrLn $ "Cannot unify type '" ++ show (typeOf e2) ++
-                         "' with type '" ++ show expectedType ++ "'."
+                         "' with type '" ++ show expType ++ "'."
               return (Error, subst)
         Nothing -> do
           putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
-                     "' with type '" ++ show expectedType ++ "'."
+                     "' with type '" ++ show expType ++ "'."
           return (Error, subst)
 
     mkLogicalOpType e1 e2 env argOrd subst = do
@@ -412,6 +439,8 @@ infer decls = do
       (f', env', argOrd', subst') <- inferExpr f env argOrd subst
       (arg', env'', argOrd'', subst'') <- inferExpr arg env' argOrd' subst'
       tCod <- mkTypeVar
+      print (typeOf f')
+      print (Arrow (typeOf arg') tCod)
       subtype (typeOf f') (Arrow (typeOf arg') tCod) env'' argOrd'' subst'' >>= \case
         (True, subst''') ->
           return ((TCallExpr f' arg', tCod), env'', argOrd'', subst''')
@@ -478,18 +507,27 @@ infer decls = do
           List.concatMap (returns . snd) actions
         returns (TReturnStatement te) = [typeOf te]
         returns _ = []
-
     inferLValueExpr tm (VarExpr name) env argOrd subst =
       case tm of
         Just t -> -- Writing to variable
-          return ((TVarExpr name, t), Map.insert name t env, subst)
+          case Map.lookup name env of
+            Just (id, _) ->
+              return ((TVarExpr (identifier name id), t),
+                      Map.insert name (id, t) env,
+                      subst)
+            Nothing ->
+              fromString name >>= \var ->
+                return ((TVarExpr var, t),
+                        Map.insert name (idOf var, t) env,
+                        subst)
         Nothing -> -- Reading from variable
           case Map.lookup name env of
-            Just ty ->
-              return ((TVarExpr name, ty), env, subst)
+            Just (u, ty) ->
+              return ((TVarExpr (identifier name u), ty), env, subst)
             Nothing -> do
               putStrLn $ "Not in scope: " ++ name
-              return ((TVarExpr name, Error), env, subst)
+              var <- fromString name
+              return ((TVarExpr var, Error), env, subst)
 
     inferLValueExpr tm (FieldAccessExpr lve field) env argOrd subst = do
       (lve', env', subst') <- inferLValueExpr Nothing lve env argOrd subst
@@ -499,7 +537,7 @@ infer decls = do
           in return ((TFieldAccessExpr lve' field, t), env', subst'')
         Nothing -> do -- Reading from variable
           u <- mkTypeVar
-          (b, subst'') <- subtype (Record True [(field, u)]) (typeOf lve') env' argOrd subst'
+          (b, subst'') <- subtype (typeOf lve') (Record True [(field, u)]) env' argOrd subst'
           case b of
             True -> return ((TFieldAccessExpr lve' field, u), env', subst'')
             False -> do

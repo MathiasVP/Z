@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Unification where
+import Prelude hiding (lookup)
 import Control.Monad
 import Data.Foldable
 import Data.Ord
@@ -38,11 +39,17 @@ unifyTypes types env argOrd subst = do
 inserts :: Ord a => Set a -> [a] -> Set a
 inserts = List.foldr Set.insert
 
+lookup :: Bindings -> Env -> Identifier -> Type
+lookup bind env s =
+  case Map.lookup (stringOf s) env of
+    Just (_, ty) -> ty
+    Nothing -> bind ! (stringOf s)
+
 unify :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Type, Substitution)
 unify t1 t2 env argOrd subst =
   let
-    lookup bind env s = Map.findWithDefault (bind ! s) s env
-
+    uni :: Set Identifier -> Bindings -> Bindings ->
+             Type -> Type -> Substitution -> IO (Type, Substitution)
     uni trace bind1 bind2 (TypeVar u) (TypeVar u') subst =
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') ->
@@ -116,10 +123,12 @@ unify t1 t2 env argOrd subst =
       (tyDom, subst') <- uni trace bind1 bind2 tyDom1 tyDom2 subst
       (tyCod, subst'') <- uni trace bind1 bind2 tyCod1 tyCod2 subst'
       return (Arrow tyDom tyCod, subst'')
+    -- TODO: Not sure if this is correct. Should go through all possibilities
     uni trace bind1 bind2 (Union t1 t2) (Union t3 t4) subst = do
       (t13, subst') <- uni trace bind1 bind2 t1 t3 subst
       (t24, subst'') <- uni trace bind1 bind2 t2 t4 subst'
       return (union t13 t24, subst'')
+    -- TODO: Should use uni instead of Eq for intersection
     uni trace bind1 bind2 (Intersect t1 t2) (Intersect t3 t4) subst =
       let intersection = Set.intersection (Set.fromList [t1, t2]) (Set.fromList [t3, t4])
       in if Set.null intersection then
@@ -144,14 +153,13 @@ unify t1 t2 env argOrd subst =
                return (t : types, subst')
       (types', subst') <- foldM f ([], subst) types
       return (List.reverse types', subst')
-
   in uni Set.empty Map.empty Map.empty t1 t2 subst
 
 unify' :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Maybe (Type, Substitution))
 unify' t1 t2 env argOrd subst =
   let
-    lookup bind env s = Map.findWithDefault (bind ! s) s env
-
+    uni' :: Set Identifier -> Bindings -> Bindings ->
+             Type -> Type -> Substitution -> IO (Maybe (Type, Substitution))
     uni' trace bind1 bind2 (TypeVar u) (TypeVar u') subst = do
       case (follow subst (TypeVar u), follow subst (TypeVar u')) of
         (TypeVar u, TypeVar u') -> return $ Just (TypeVar u', Map.insert u (TypeVar u') subst)
@@ -247,20 +255,28 @@ unify' t1 t2 env argOrd subst =
         (_, _) -> return Nothing
     uni' trace bind1 bind2 ty (Union t1 t2) subst =
       uni' trace bind1 bind2 ty t1 subst >>= \case
-        Just (t, subst') -> return $ Just (Union t t2, subst')
-        Nothing -> uni' trace bind1 bind2 ty t2 subst >>= \case
-                     Just (t, subst') -> return $ Just (Union t1 t, subst')
-                     Nothing          -> return Nothing
+        Just (t', subst') ->
+          uni' trace bind1 bind2 ty t2 subst' >>= \case
+            Just (t'', subst'') ->
+              return $ Just (union t' t'', subst'')
+            Nothing -> return Nothing
+        Nothing -> return Nothing
     uni' trace bind1 bind2 (Union t1 t2) ty subst =
       uni' trace bind1 bind2 ty (Union t1 t2) subst
-    -- TODO: This shouldn't intersect using equality. Use unification instead
     uni' trace bind1 bind2 (Intersect t1 t2) (Intersect t3 t4) subst =
-      let intersection = Set.intersection (Set.fromList [t1, t2]) (Set.fromList [t3, t4])
-      in if Set.null intersection then return Nothing
-         else return $ Just (List.foldl1' Intersect (Set.toList intersection), subst)
-    uni' trace bind1 bind2 (Intersect t1 t2) t subst
-      | Set.member t (Set.fromList [t1, t2]) = return $ Just (t, subst)
-      | otherwise = return Nothing
+      uni' trace bind1 bind2 t1 (Intersect t3 t4) subst >>= \case
+        Just (ty1, subst1) ->
+          uni' trace bind1 bind2 t2 (Intersect t3 t4) subst1 >>= \case
+            Just (ty2, subst2) -> return $ Just (intersect ty1 ty2, subst2)
+            Nothing -> return $ Just (ty1, subst1)
+        Nothing -> return Nothing
+    uni' trace bind1 bind2 (Intersect t1 t2) t subst =
+      uni' trace bind1 bind2 t1 t subst >>= \case
+        Just (ty1, subst1) ->
+          uni' trace bind1 bind2 t2 t subst1 >>= \case
+            Just (ty2, subst2) -> return $ Just (intersect ty1 ty2, subst2)
+            Nothing -> return $ Just (ty1, subst1)
+        Nothing -> return Nothing
     uni' trace bind1 bind2 t (Intersect t1 t2) subst =
       uni' trace bind1 bind2 (Intersect t1 t2) t subst
     uni' trace bind1 bind2 IntType IntType subst = return $ Just (IntType, subst)

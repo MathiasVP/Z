@@ -1,10 +1,11 @@
 module TypedAst(module TypedAst, module Ast) where
 import Ast
 import Types
+import Unique
 import qualified Data.List as List
 
-data TypedDecl = TTypeDecl String [String] Type
-               | TFunDecl String [String] [TypedMatchExpr] Type TypedStatement
+data TypedDecl = TTypeDecl Identifier [String] Type
+               | TFunDecl Identifier [String] [TypedMatchExpr] Type TypedStatement
     deriving (Show)
     
 data TExpr = TIntExpr Int
@@ -38,7 +39,7 @@ type TypedExpr = (TExpr, Type)
 data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
                 | TListMatchExpr [TypedMatchExpr]
                 | TRecordMatchExpr [(String, TypedMatchExpr)]
-                | TVarMatch String
+                | TVarMatch Identifier
                 | TIntMatchExpr Int
                 | TStringMatchExpr String
                 | TBoolMatchExpr Bool
@@ -46,7 +47,7 @@ data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]
 
 type TypedMatchExpr = (TMatchExpr, Type)
 
-data TLValueExpr = TVarExpr String
+data TLValueExpr = TVarExpr Identifier
                  | TFieldAccessExpr TypedLValueExpr String
                  | TArrayAccessExpr TypedLValueExpr TypedExpr
   deriving (Show)

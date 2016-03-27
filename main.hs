@@ -1,6 +1,6 @@
 import Parser as P
 import qualified TypeInfer as T
-import qualified IRGen as IR
+--import qualified IRGen as IR
 import qualified InferFieldOffsets as IFO
 import qualified Data.List as List
 import Text.Groom
