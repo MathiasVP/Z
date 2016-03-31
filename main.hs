@@ -3,7 +3,10 @@ import qualified TypeInfer as T
 --import qualified IRGen as IR
 import qualified InferFieldOffsets as IFO
 import qualified Data.List as List
+import qualified Data.Map as Map
+import Data.Map(Map, (!))
 import CubicSolver as S
+import Data.Graph.Inductive.Dot
 import Text.Groom
 
 main :: IO ()
@@ -13,37 +16,37 @@ main = let path = "../test.z"
                Left err -> print err
                Right ast -> do
                   let constraints = [
-                        constraint (Membership (Token "inc") (Variable "inc")),
-                        constraint (Membership (Token "dec") (Variable "dec")),
-                        constraint (Membership (Token "ide") (Variable "ide")),
+                        constraint (Membership (Element "inc") (Set "inc")),
+                        constraint (Membership (Element "dec") (Set "dec")),
+                        constraint (Membership (Element "ide") (Set "ide")),
                         
-                        constraint (Inclusion (Variable "ide") (Variable "f")),
-                        constraint (Inclusion (Variable "(f)(n)") (Variable "r")),
+                        constraint (Inclusion (Set "ide") (Set "f")),
+                        constraint (Inclusion (Set "(f)(n)") (Set "r")),
                         
-                        constraint (CondInclusion (Token "inc") (Variable ("f")) (Variable "n") (Variable "i")),
-                        constraint (CondInclusion (Token "inc") (Variable ("f")) (Variable "i+1") (Variable "(f)(n)")),
+                        constraint (CondInclusion (Element "inc") (Set ("f")) (Set "n") (Set "i")),
+                        constraint (CondInclusion (Element "inc") (Set ("f")) (Set "i+1") (Set "(f)(n)")),
                         
-                        constraint (CondInclusion (Token "dec") (Variable ("f")) (Variable "n") (Variable "j")),
-                        constraint (CondInclusion (Token "dec") (Variable ("f")) (Variable "j-1") (Variable "(f)(n)")),
+                        constraint (CondInclusion (Element "dec") (Set ("f")) (Set "n") (Set "j")),
+                        constraint (CondInclusion (Element "dec") (Set ("f")) (Set "j-1") (Set "(f)(n)")),
                         
-                        constraint (CondInclusion (Token "ide") (Variable ("f")) (Variable "n") (Variable "k")),
-                        constraint (CondInclusion (Token "ide") (Variable ("f")) (Variable "k") (Variable "(f)(n)")),
+                        constraint (CondInclusion (Element "ide") (Set ("f")) (Set "n") (Set "k")),
+                        constraint (CondInclusion (Element "ide") (Set ("f")) (Set "k") (Set "(f)(n)")),
                         
-                        constraint (Inclusion (Variable "input") (Variable "x")),
-                        constraint (Inclusion (Variable "foo(x,inc)") (Variable "y")),
-                        constraint (Inclusion (Variable "foo(x,dec)") (Variable "y")),
+                        constraint (Inclusion (Set "input") (Set "x")),
+                        constraint (Inclusion (Set "foo(x,inc)") (Set "y")),
+                        constraint (Inclusion (Set "foo(x,dec)") (Set "y")),
                         
-                        constraint (Membership (Token "foo") (Variable "foo")),
+                        constraint (Membership (Element "foo") (Set "foo")),
                         
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "x") (Variable "n")),
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "inc") (Variable "f")),
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "r") (Variable "foo(x,inc)")),
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "x") (Set "n")),
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "inc") (Set "f")),
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "r") (Set "foo(x,inc)")),
                         
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "x") (Variable "n")),
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "dec") (Variable "f")),
-                        constraint (CondInclusion (Token "foo") (Variable "foo") (Variable "r") (Variable "foo(x,dec)"))]
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "x") (Set "n")),
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "dec") (Set "f")),
+                        constraint (CondInclusion (Element "foo") (Set "foo") (Set "r") (Set "foo(x,dec)"))]
                       inst = List.foldl (flip ($)) S.empty constraints
-                  putStrLn (groom inst)
+                  putStrLn $ groom $ (solution inst) ! (Set "f")
                  --(typed, env, subst) <- T.infer ast
                  --let fieldMap = IFO.construct env typed
                  --putStrLn (groom typed)
