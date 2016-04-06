@@ -13,9 +13,8 @@ import Data.Set(Set)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Control.Monad.State.Lazy
-import Data.Traversable hiding(mapM)
-import Control.Applicative hiding(empty)
-import qualified Debug.Trace as Debug
+import Data.Traversable hiding (mapM)
+import Control.Applicative hiding (empty)
 
 newtype Var = Var Int
   deriving (Show, Ord, Eq)
@@ -63,6 +62,7 @@ construct env decls = (fm, eqs)
 visitDecl :: TypedDecl -> State ST ()
 visitDecl (TFunDecl _ _ args ty stmt) =
   mapM visitMatchExpr args >> visitStmt stmt >> visitType ty
+visitDecl (TTypeDecl _ _ ty) = visitType ty
 
 visitStmt :: TypedStatement -> State ST ()
 visitStmt (TIfStatement e stmt Nothing) =

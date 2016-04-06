@@ -6,7 +6,7 @@ import qualified Data.List as List
 
 data TypedDecl = TTypeDecl Identifier [String] Type
                | TFunDecl Identifier [String] [TypedMatchExpr] Type TypedStatement
-    deriving (Show)
+    deriving (Show, Ord, Eq)
     
 data TExpr = TIntExpr Int
            | TRealExpr Double
@@ -32,7 +32,7 @@ data TExpr = TIntExpr Int
            | TRecordExpr [(String, TypedExpr)]
            | TLValue TypedLValueExpr
            | TLambdaExpr [TypedMatchExpr] TypedStatement
-  deriving Show
+  deriving (Show, Ord, Eq)
   
 type TypedExpr = (TExpr, Type)
 
@@ -50,7 +50,7 @@ type TypedMatchExpr = (TMatchExpr, Type)
 data TLValueExpr = TVarExpr Identifier
                  | TFieldAccessExpr TypedLValueExpr String
                  | TArrayAccessExpr TypedLValueExpr TypedExpr
-  deriving (Show)
+  deriving (Show, Ord, Eq)
 
 type TypedLValueExpr = (TLValueExpr, Type)
 
@@ -64,4 +64,4 @@ data TypedStatement = TIfStatement TypedExpr TypedStatement (Maybe TypedStatemen
                     | TBreakStatement
                     | TContinueStatement
                     | TDeclStatement TypedDecl
-  deriving (Show)
+  deriving (Show, Ord, Eq)

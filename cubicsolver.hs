@@ -15,7 +15,6 @@ import qualified Data.Set as Set
 import qualified Data.Graph.Inductive.Graph as Gr
 import Data.Graph.Inductive.Graph((&))
 import Data.Graph.Inductive.PatriciaTree(Gr)
-import qualified Debug.Trace as Debug
 
 newtype Element a = Element a
   deriving (Ord, Eq, Show)
@@ -33,10 +32,10 @@ data Instance a b = Instance (Gr (Node a b) ())
                              (Map Pos (Element a))
                              (Map (Set b) Gr.Node)
   deriving Show
-  
+
 empty :: Instance a b
 empty = Instance Gr.empty Map.empty Map.empty Map.empty
-  
+
 zeroBitsOfLength :: Int -> BitVector b
 zeroBitsOfLength k = Vector.replicate k (False, [])
 
@@ -88,14 +87,15 @@ isSet v t = do
     Just (b, _) -> return b
     Nothing -> return False
         
-pairs :: (Ord a, Ord b) => Set b -> Element a -> State (Instance a b) [(Set b, Set b)]
+pairs :: (Ord a, Ord b) => Set b -> Element a ->
+           State (Instance a b) [(Set b, Set b)]
 pairs v t = do
   p <- posOf t
   bits <- bitvectorOf v
   return $ snd $ entry bits p
 
-insertPair :: (Ord a, Ord b) => (Set b, Set b) -> Set b ->
-                Element a -> State (Instance a b) ()
+insertPair :: (Ord a, Ord b) => (Set b, Set b) -> Set b -> Element a ->
+                State (Instance a b) ()
 insertPair pair v t = do
   node <- nodeOf v
   p <- posOf t
@@ -111,7 +111,7 @@ insertPair pair v t = do
     let (Just (to, _, _, from), gr') = Gr.match node gr
     in Instance ((to, node, Node (v, bits'), from) & gr')
                 tokmap invtokmap varmap
-          
+
 entry :: BitVector b -> Pos -> (Bool, [(Set b, Set b)])
 entry bits p =
   case bits !? p of
@@ -134,11 +134,9 @@ set v t = do
           let (Just (to, _, Node (_, bits), from), gr') = Gr.match node gr
           in Instance ((to, node, Node (v, bits'), from) & gr')
                       tokmap invtokmap varmap)
-  mapM_ insertEdge pairs
-        
+  mapM_ insertEdge pairs        
 
-insertEdge :: (Ord a, Ord b) => (Set b, Set b) ->
-                State (Instance a b) ()
+insertEdge :: (Ord a, Ord b) => (Set b, Set b) -> State (Instance a b) ()
 insertEdge (src, dst) = do
   from <- nodeOf src
   to <- nodeOf dst
@@ -158,22 +156,21 @@ data Constraint a b
 
 type Solution a b = Map (Set b) (Set.Set (Element a))
 
-constraint :: (Ord a, Ord b) => Constraint a b ->
-                   Instance a b -> Instance a b
+constraint :: (Ord a, Ord b) => Constraint a b -> Instance a b -> Instance a b
 constraint (Membership t v) =
   execState $ do
     set v t
     ps <- pairs v t
     mapM_ insertEdge ps
 constraint (Inclusion x y) =
-  execState (insertEdge (x, y))
+  execState $ insertEdge (x, y)
 constraint (CondInclusion t v x y) =
   execState $ do
     b <- isSet v t
     if b then insertEdge (x, y)
     else insertPair (x, y) v t
 
-solution :: (Ord a, Ord b, Show a, Show b) => Instance a b -> Solution a b
+solution :: (Ord a, Ord b) => Instance a b -> Solution a b
 solution (Instance gr tokmap invtokmap varmap) =
   Map.foldrWithKey extract Map.empty varmap
   where

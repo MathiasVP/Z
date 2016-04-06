@@ -138,7 +138,7 @@ rename new old ty =
       re (Intersect t1 t2) = intersect (re t1) (re t2)
       re t = t
   in re ty
-  
+
 makeForall :: Substitution -> Type -> Type -> IO Type
 makeForall subst ty1 ty2 =
   foldrM make ty2 (typevars (follow subst ty1))
