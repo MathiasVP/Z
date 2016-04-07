@@ -18,31 +18,8 @@ import TypedAst
 import Unification hiding (unify, unify', unifyTypes, makeRecord, makeIntersect)
 import Subtype hiding (subtype)
 import Utils
-import TypeUtils hiding (follow, makeForall, free)
+import TypeUtils
 import Replace
-
-type Infer a = StateT (Substitution, Env, ArgOrd) IO a
-
-substitution :: Infer Substitution
-substitution = gets (\(s, _, _) -> s)
-
-environment :: Infer Env
-environment = gets (\(_, e, _) -> e)
-
-argumentOrder :: Infer ArgOrd
-argumentOrder = gets (\(_, _, a) -> a)
-
-modifySubst :: (Substitution -> Substitution) -> Infer ()
-modifySubst f = modify $ \(s, e, a) -> (f s, e, a)
-
-modifyEnv :: (Env -> Env) -> Infer ()
-modifyEnv f = modify $ \(s, e, a) -> (s, f e, a)
-
-modifyArgOrd :: (ArgOrd -> ArgOrd) -> Infer ()
-modifyArgOrd f = modify $ \(s, e, a) -> (s, e, f a)
-
-follow :: Type -> Infer Type
-follow = undefined
 
 unify :: Type -> Type -> Infer Type
 unify = undefined
@@ -117,9 +94,6 @@ infer decls = do
 
 insertArgOrd :: String -> [String] -> Infer ()
 insertArgOrd name targs = modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
-
-makeForall :: Type -> Type -> Infer Type
-makeForall = undefined
 
 subtype :: Type -> Type -> Infer Bool
 subtype = undefined
@@ -260,9 +234,6 @@ inferMatchExpr tm (VarMatch name) =
 inferMatchExpr tm (IntMatchExpr n) = return (TIntMatchExpr n, IntType)
 inferMatchExpr tm (StringMatchExpr s) = return (TStringMatchExpr s, StringType)
 inferMatchExpr tm (BoolMatchExpr b) = return (TBoolMatchExpr b, BoolType)
-
-free :: Type -> Infer Bool
-free = undefined
 
 inferStatement :: Statement -> Infer TypedStatement
 inferStatement (IfStatement e s Nothing) = do

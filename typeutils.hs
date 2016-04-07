@@ -1,10 +1,12 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, LambdaCase #-}
 
 module TypeUtils where
 import Data.Map (Map)
 import Control.Monad
+import Control.Monad.Loops
 import Data.Ord
 import Data.Foldable
+import Control.Monad.State.Lazy
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
@@ -16,6 +18,28 @@ type Substitution = Map UniqueInt Type
 type Env = Map String (UniqueInt, Type)
 type ArgOrd = Map String (Map Int String)
 type Bindings = Map String Type
+
+type Infer a = StateT (Substitution, Env, ArgOrd) IO a
+
+
+substitution :: Infer Substitution
+substitution = gets (\(s, _, _) -> s)
+
+environment :: Infer Env
+environment = gets (\(_, e, _) -> e)
+
+argumentOrder :: Infer ArgOrd
+argumentOrder = gets (\(_, _, a) -> a)
+
+modifySubst :: (Substitution -> Substitution) -> Infer ()
+modifySubst f = modify $ \(s, e, a) -> (f s, e, a)
+
+modifyEnv :: (Env -> Env) -> Infer ()
+modifyEnv f = modify $ \(s, e, a) -> (s, f e, a)
+
+modifyArgOrd :: (ArgOrd -> ArgOrd) -> Infer ()
+modifyArgOrd f = modify $ \(s, e, a) -> (s, e, f a)
+
 
 exprOf = fst
 typeOf = snd
@@ -36,37 +60,48 @@ inferList inferer env argOrd subst list =
         (elem', env', argOrd', subst') <- inferer elem env argOrd subst
         return (elem' : list', env', argOrd', subst')
 
-follow :: Substitution -> Type -> Type
-follow subst = fol Set.empty
+follow :: Type -> Infer Type
+follow = fol Set.empty
   where
     fol visited (TypeVar u)
-      | Set.member u visited = TypeVar u
-      | otherwise =
-        case Map.lookup u subst of
-          Just t -> fol (Set.insert u visited) t
-          Nothing -> TypeVar u
-    fol visited (Array ty) = Array (fol visited ty)
-    fol visited (Tuple types) = Tuple (List.map (fol visited) types)
+      | Set.member u visited = return $ TypeVar u
+      | otherwise = do
+		substitution >>= \subst ->
+		  case Map.lookup u subst of
+		    Just t -> fol (Set.insert u visited) t
+		    Nothing -> return $ TypeVar u
+    fol visited (Array ty) = fol visited ty >>= return . Array
+    fol visited (Tuple types) = mapM (fol visited) types >>= return . Tuple
     fol visited (Record b fields) =
-      let f (s, ty) = (s, fol visited ty)
-      in Record b (List.map f fields)
-    fol visited (Arrow tDom tCod) = Arrow (fol visited tDom) (fol visited tCod)
-    fol visited (Union t1 t2) = union (fol visited t1) (fol visited t2)
-    fol visited (Forall u ty) = Forall u (fol visited ty)
-    fol visited (Intersect t1 t2) = Intersect (fol visited t1) (fol visited t2)
-    fol _ t = t
+      let f (s, ty) = fol visited ty >>= return . (s,)
+      in mapM f fields >>= return . Record b
+    fol visited (Arrow tDom tCod) = do
+		tDom' <- fol visited tDom
+		tCod' <- fol visited tCod
+		return $ Arrow tDom' tCod'
+    fol visited (Union t1 t2) = do
+		t1' <- fol visited t1
+		t2' <- fol visited t2
+		return $ union t1 t2
+    fol visited (Forall u ty) = fol visited ty >>= return . Forall u
+    fol visited (Intersect t1 t2) = do
+		t1' <- fol visited t1
+		t2' <- fol visited t2
+		return $ Intersect t1 t2
+    fol _ t = return t
 
-free :: Type -> Substitution -> Bool
-free ty subst =
-  case follow subst ty of
-    TypeVar _ -> True
-    _         -> False
-    
-makeBindings :: ArgOrd -> Identifier -> [Type] -> Bindings
-makeBindings argOrd s types =
+free :: Type -> Infer Bool
+free ty =
+  follow ty >>= \case
+    TypeVar _ -> return True
+    _         -> return False
+
+makeBindings :: Identifier -> [Type] -> Infer Bindings
+makeBindings s types = do
+  argOrd <- argumentOrder
   case Map.lookup (stringOf s) argOrd of
-    Just argOrd -> Map.fromList $ List.zip (Map.elems argOrd) types
-    Nothing -> Map.empty
+    Just argOrd -> return $ Map.fromList $ List.zip (Map.elems argOrd) types
+    Nothing -> return Map.empty
 
 instansiate :: String -> Type -> Type -> Type
 instansiate name ty t =
@@ -108,20 +143,21 @@ typevars (Array ty) = typevars ty
 typevars (Intersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars _ = []
 
-isQuantified :: Substitution -> UniqueInt -> Type -> Bool
-isQuantified subst u ty = isQuant ty
+isQuantified :: UniqueInt -> Type -> Infer Bool
+isQuantified u ty = isQuant ty
   where
-    isQuant (Forall u' ty)
-      | follow subst (TypeVar u') == follow subst (TypeVar u) =
-        True
-      | otherwise = isQuant ty
-    isQuant (Arrow t1 t2) = isQuant t1 || isQuant t2
-    isQuant (Union t1 t2) = isQuant t1 || isQuant t2
-    isQuant (Tuple tys) = List.any isQuant tys
-    isQuant (Record _ fields) = List.any (isQuant . snd) fields
+    isQuant (Forall u' ty) = do
+	  t <- follow (TypeVar u')
+	  t' <- follow (TypeVar u)
+	  if t == t' then return True else isQuant ty
+    isQuant (Arrow t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant (Union t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant (Tuple tys) = anyM isQuant tys
+    isQuant (Record _ fields) = anyM (isQuant . snd) fields
     isQuant (Array ty) = isQuant ty
-    isQuant (Intersect t1 t2) = isQuant t1 || isQuant t2
-    isQuant _ = False
+    isQuant (Intersect t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant _ = return False
+    or = liftM2 (||)
 
 rename :: UniqueInt -> UniqueInt -> Type -> Type
 rename new old ty =
@@ -139,12 +175,15 @@ rename new old ty =
       re t = t
   in re ty
 
-makeForall :: Substitution -> Type -> Type -> IO Type
-makeForall subst ty1 ty2 =
-  foldrM make ty2 (typevars (follow subst ty1))
-  where make u ty
-          | isQuantified subst u ty ||
-            not (free (TypeVar u) subst) = return (follow subst ty)
-          | otherwise =
-            do TypeVar u' <- mkTypeVar
-               return $ Forall u' (rename u' u (follow subst ty))
+makeForall :: Type -> Type -> Infer Type
+makeForall ty1 ty2 = do
+  ty1' <- follow ty1
+  foldrM make ty2 (typevars ty1')
+  where make u ty = do
+          isquant <- isQuantified u ty
+          isfree <- free (TypeVar u)
+          if isquant || not isfree then follow ty
+          else do
+          TypeVar u' <- lift mkTypeVar
+          ty' <- follow ty
+          return $ Forall u' (rename u' u ty')
