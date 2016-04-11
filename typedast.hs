@@ -1,13 +1,13 @@
 module TypedAst(module TypedAst, module Ast) where
 import Ast
 import Types
-import Unique
-import qualified Data.List as List
+import Unique()
+import Data.List()
 
 data TypedDecl = TTypeDecl Identifier [String] Type
                | TFunDecl Identifier [String] [TypedMatchExpr] Type TypedStatement
     deriving (Show, Ord, Eq)
-    
+
 data TExpr = TIntExpr Int
            | TRealExpr Double
            | TBoolExpr Bool
@@ -33,7 +33,7 @@ data TExpr = TIntExpr Int
            | TLValue TypedLValueExpr
            | TLambdaExpr [TypedMatchExpr] TypedStatement
   deriving (Show, Ord, Eq)
-  
+
 type TypedExpr = (TExpr, Type)
 
 data TMatchExpr = TTupleMatchExpr [TypedMatchExpr]

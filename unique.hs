@@ -1,21 +1,13 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-
 module Unique(unique, UniqueInt(UniqueInt)) where
-import Data.IORef
-import Data.Global
-import Data.Typeable
+import Data.Unique
 
 newtype UniqueInt = UniqueInt Int
-  deriving (Typeable, Eq, Ord)
+  deriving (Eq, Ord)
 
 instance Show UniqueInt where
   show (UniqueInt n) = show n
-  
-counter :: IORef UniqueInt
-counter = declareIORef "unique-counter" (UniqueInt 0)
 
 unique :: IO UniqueInt
 unique = do
-  counter' <- readIORef counter
-  modifyIORef counter (\(UniqueInt n) -> UniqueInt (n+1))
-  return counter'
+  u <- newUnique
+  return $ UniqueInt $ hashUnique u

@@ -1,6 +1,9 @@
-module Subtype (subtype) where
+{-# LANGUAGE LambdaCase #-}
+
+module Subtype where
 import Prelude hiding (lookup)
 import Control.Monad
+import Control.Monad.State.Lazy
 import Data.Map (Map)
 import Data.Map ((!))
 import qualified Data.Map as Map
@@ -34,105 +37,127 @@ invert v = v
 
 maxNumberOfUnrolls = 100
 
-variance :: Env -> ArgOrd -> Type -> String -> Variance
-variance env argOrd t s =
+variance :: Type -> String -> Infer Variance
+variance t s =
   let var trace v (Name s' tys)
-        | Set.member s' trace = v
-        | otherwise =
+        | Set.member s' trace = return v
+        | otherwise = do
+          env <- environment
+          argOrd <- argumentOrder
           case Map.lookup (stringOf s') env of
             Just (_, ty) ->
-              let order = argOrd ! (stringOf s')
+              let order = argOrd ! stringOf s'
                   names = List.map (order !) [0..]
                   ty' = instansiates ty (Map.fromList (List.zip names tys))
               in var (Set.insert s' trace) v ty'
             Nothing
-              | s == stringOf s'   -> lub v Positive
-              | otherwise          -> v
-      var trace v (Arrow t1 t2) =
-        lub (invert (var trace v t1)) (var trace v t2)
+              | s == stringOf s'   -> return $ lub v Positive
+              | otherwise          -> return v
+      var trace v (Arrow t1 t2) = do
+        v1 <- var trace v t1
+        v2 <- var trace v t2
+        return $ lub (invert v1) v2
       var trace v (Forall u ty) = var trace v ty
-      var trace v (Union t1 t2) = lub (var trace v t1) (var trace v t2)
-      var trace v (Tuple ts) = lubs (List.map (var trace v) ts)
-      var trace v (Record b fields) = lubs (List.map (var trace v . snd) fields)
+      var trace v (Union t1 t2) = do
+        v1 <- var trace v t1
+        v2 <- var trace v t2
+        return $ lub v1 v2
+      var trace v (Tuple ts) = do
+        vs <- mapM (var trace v) ts
+        return $ lubs vs
+      var trace v (Record b fields) = do
+        vs <- mapM (var trace v . snd) fields
+        return $ lubs vs
       var trace v (Array ty) = var trace v ty
-      var trace v (Intersect t1 t2) = lubs (List.map (var trace v) [t1, t2])
-      var trace v _ = v
-  in var Set.empty Bottom t  
-  
-lookup :: Bindings -> Env -> Identifier -> Type
-lookup bind env s =
+      var trace v (Intersect t1 t2) = do
+        v1 <- var trace v t1
+        v2 <- var trace v t2
+        return $ lub v1 v2
+      var trace v _ = return v
+  in var Set.empty Bottom t
+
+lookup :: Bindings -> Identifier -> Infer Type
+lookup bind s = do
+  env <- environment
   case Map.lookup (stringOf s) env of
-    Just (_, ty) -> ty
-    Nothing -> bind ! (stringOf s)
-  
-subtype :: Type -> Type -> Env -> ArgOrd -> Substitution -> IO (Bool, Substitution)
-subtype t1 t2 env argOrd subst =
+    Just (_, ty) -> return ty
+    Nothing -> return $ bind ! stringOf s
+
+subtype :: Type -> Type -> Infer Bool
+subtype t1 t2 =
   let
     updateOrElse f def k map =
       case Map.lookup k map of
         Just a -> Map.insert k (f a) map
         Nothing -> Map.insert k def map
-    
+
     sub :: Map Identifier Int -> Bindings -> Bindings ->
              Map (Identifier, Identifier) ([Type], [Type]) ->
-               Substitution -> Type -> Type -> IO (Bool, Substitution)
-    sub trace bind1 bind2 assum subst (Forall u t1) t2 =
-      do TypeVar u' <- mkTypeVar
-         (b, subst') <- sub trace bind1 bind2 assum subst (rename u' u t1) t2
-         return (b, subst')
-    sub trace bind1 bind2 assum subst t1 (Forall u t2) =
-      do TypeVar u' <- mkTypeVar
-         (b, subst') <- sub trace bind1 bind2 assum subst t1 (rename u' u t2)
-         return (b, subst')
-    sub trace bind1 bind2 assum subst t1 t2@(TypeVar u) =
-      case follow subst t2 of
+               Type -> Type -> Infer Bool
+    sub trace bind1 bind2 assum (Forall u t1) t2 =
+      do TypeVar u' <- lift mkTypeVar
+         sub trace bind1 bind2 assum (rename u' u t1) t2
+    sub trace bind1 bind2 assum t1 (Forall u t2) =
+      do TypeVar u' <- lift mkTypeVar
+         sub trace bind1 bind2 assum t1 (rename u' u t2)
+    sub trace bind1 bind2 assum t1 t2@(TypeVar u) =
+      follow t2 >>= \case
         TypeVar u -> do
-          return (True, Map.insert u (follow subst t1) subst)
-        ty -> sub trace bind1 bind2 assum subst t1 ty
-    sub trace bind1 bind2 assum subst t1@(TypeVar u) t2 =
-      case follow subst t1 of
+          t1' <- follow t1
+          modifySubst (Map.insert u t1')
+          return True
+        ty -> sub trace bind1 bind2 assum t1 ty
+    sub trace bind1 bind2 assum t1@(TypeVar u) t2 =
+      follow t1 >>= \case
         TypeVar u -> do
-          return (True, Map.insert u (follow subst t2) subst)
-        ty -> sub trace bind1 bind2 assum subst ty t2
-    sub trace bind1 bind2 assum subst (Name s1 tys1) (Name s2 tys2) =
+          t2' <- follow t2
+          modifySubst (Map.insert u t2')
+          return True
+        ty -> sub trace bind1 bind2 assum ty t2
+    sub trace bind1 bind2 assum (Name s1 tys1) (Name s2 tys2) =
       case Map.lookup (s1, s2) assum of
         Just (tys1', tys2') -> do
-          let ty1 = lookup bind1 env s1
-              ty2 = lookup bind2 env s2
-              vars1 = List.map (variance env argOrd ty1) (Map.keys bind1)
-              vars2 = List.map (variance env argOrd ty2) (Map.keys bind2)
-          (b1, subst') <- foldM f (True, subst) (List.zip3 tys1' tys2' vars1)
-          foldM f (b1, subst') (List.zip3 tys1' tys2' vars1)
+          ty1 <- lookup bind1 s1
+          ty2 <- lookup bind2 s2
+          vars1 <- mapM (variance ty1) (Map.keys bind1)
+          vars2 <- mapM (variance ty2) (Map.keys bind2)
+          b1 <- foldM f True (List.zip3 tys1' tys2' vars1)
+          foldM f b1 (List.zip3 tys1' tys2' vars1)
         Nothing
           | s1 == s2 && Map.notMember (stringOf s1) bind1 &&
-            Map.notMember (stringOf s2) bind2 ->
-            let (_, ty) = env ! (stringOf s1)
-                vars = List.map (variance env argOrd ty) (Map.keys bind1)
-            in foldM f (True, subst) (List.zip3 tys1 tys2 vars)
-          | otherwise ->
-            let t1 = lookup bind1 env s1
-                t2 = lookup bind2 env s2
-                assum' = Map.insert (s1, s2) (tys1, tys2) assum
-            in sub trace bind1 bind2 assum' subst t1 t2
-       where f (True, subst) (t1, t2, Top) = do
-               (b1, subst') <- sub trace bind1 bind2 assum subst t1 t2
-               (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 t1
-               return (b1 && b2, subst'')
-             f (True, subst) (t1, t2, Positive) = sub trace bind1 bind2 assum subst t1 t2
-             f (True, subst) (t1, t2, Negative) = sub trace bind1 bind2 assum subst t2 t1
-             f (True, subst) (t1, t2, Bottom) = return (True, subst)
-             f (False, subst) _ = return (False, subst)
-    sub trace bind1 bind2 assum subst (Name s tys) ty =
+            Map.notMember (stringOf s2) bind2 -> do
+              env <- environment
+              let (_, ty) = env ! stringOf s1
+              vars <- mapM (variance ty) (Map.keys bind1)
+              foldM f True (List.zip3 tys1 tys2 vars)
+          | otherwise -> do
+              t1 <- lookup bind1 s1
+              t2 <- lookup bind2 s2
+              let assum' = Map.insert (s1, s2) (tys1, tys2) assum
+              sub trace bind1 bind2 assum' t1 t2
+       where f True (t1, t2, Top) = do
+               b1 <- sub trace bind1 bind2 assum t1 t2
+               b2 <- sub trace bind1 bind2 assum t2 t1
+               return (b1 && b2)
+             f True (t1, t2, Positive) = sub trace bind1 bind2 assum t1 t2
+             f True (t1, t2, Negative) = sub trace bind1 bind2 assum t2 t1
+             f True (t1, t2, Bottom) = return True
+             f False _ = return False
+    sub trace bind1 bind2 assum (Name s tys) ty =
       case Map.lookup s trace of
-        Just n -> return (n < maxNumberOfUnrolls, subst)
-        Nothing -> sub (updateOrElse (+1) 0 s trace) bind1' bind2 assum subst (lookup bind1 env s) ty
-      where bind1' = makeBindings argOrd s tys
-    sub trace bind1 bind2 assum subst ty (Name s tys) =
+        Just n -> return $ n < maxNumberOfUnrolls
+        Nothing -> do
+          t <- lookup bind1 s
+          bind1' <- makeBindings s tys
+          sub (updateOrElse (+1) 0 s trace) bind1' bind2 assum t ty
+    sub trace bind1 bind2 assum ty (Name s tys) =
       case Map.lookup s trace of
-        Just n -> return (n < maxNumberOfUnrolls, subst)
-        Nothing -> sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum subst ty (lookup bind2 env s)
-      where bind2' = makeBindings argOrd s tys
-    sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) = do
+        Just n -> return $ n < maxNumberOfUnrolls
+        Nothing -> do
+          t <- lookup bind2 s
+          bind2' <- makeBindings s tys
+          sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum ty t
+{-    sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) = do
       (b1121, subst1121) <- sub trace bind1 bind2 assum subst t11 t21
       (b1221, subst1221) <- sub trace bind1 bind2 assum subst1121 t12 t21
       (b1222, subst1222) <- sub trace bind1 bind2 assum subst1121 t12 t22
@@ -189,5 +214,5 @@ subtype t1 t2 env argOrd subst =
     sub trace bind1 bind2 _ subst RealType RealType = return (True, subst)
     sub trace bind1 bind2 _ subst BoolType BoolType = return (True, subst)
     sub trace bind1 bind2 _ subst StringType StringType = return (True, subst)
-    sub trace bind1 bind2 _ _ _ _ = return (False, subst)
-  in sub Map.empty Map.empty Map.empty Map.empty subst t1 t2
+    sub trace bind1 bind2 _ _ _ _ = return False-}
+  in sub Map.empty Map.empty Map.empty Map.empty t1 t2

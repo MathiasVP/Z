@@ -175,6 +175,17 @@ rename new old ty =
       re t = t
   in re ty
 
+local :: Infer a -> Infer (a, Substitution, Env, ArgOrd)
+local infer =
+  do env <- environment
+     argOrd <- argumentOrder
+     subst <- substitution
+     r <- infer
+     modifyEnv (const env)
+     modifyArgOrd (const argOrd)
+     modifySubst (const subst)
+     return (r, subst, env, argOrd)
+
 makeForall :: Type -> Type -> Infer Type
 makeForall ty1 ty2 = do
   ty1' <- follow ty1

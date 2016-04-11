@@ -1,12 +1,12 @@
 module Types where
 import qualified Data.List as List
-import qualified Data.Map as Map
-import Data.Foldable
+import Data.Map()
+import Data.Foldable()
 import Unique
 
 newtype Identifier = Identifier (String, UniqueInt)
   deriving (Eq, Ord, Show)
-  
+
 stringOf :: Identifier -> String
 stringOf (Identifier (s, _)) = s
 
@@ -102,20 +102,20 @@ contains (Record _ fields1) (Record _ fields2)
 contains (Forall u1 ty1) (Forall u2 ty2)
   | u1 == u2 && ty1 == ty2 = True
   | otherwise = False
-contains (Forall u t1) t2 = contains t1 t2
+contains (Forall _ t1) t2 = contains t1 t2
 contains (TypeVar u1) (TypeVar u2) =
   u1 == u2
 contains Error Error = True
 contains _ _ = False
 
 union :: Type -> Type -> Type
-union t1 (Union t2 t3) = union (union t1 t2) t3
+union t1 (Union t2 t3) = (t1 `union` t2) `union` t3
 union t1 t2
   | t1 `contains` t2 = t1
   | otherwise = Union t1 t2
 
 intersect :: Type -> Type -> Type
-intersect t1 (Intersect t2 t3) = intersect (intersect t1 t2) t3
+intersect t1 (Intersect t2 t3) = (t1 `intersect` t2) `intersect` t3
 intersect t1 t2
   | t1 `contains` t2 = t2
   | otherwise = Intersect t1 t2

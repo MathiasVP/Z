@@ -15,26 +15,11 @@ import Text.Groom
 
 import Types
 import TypedAst
-import Unification hiding (unify, unify', unifyTypes, makeRecord, makeIntersect)
+import Unification
 import Subtype hiding (subtype)
 import Utils
 import TypeUtils
 import Replace
-
-unify :: Type -> Type -> Infer Type
-unify = undefined
-
-unify' :: Type -> Type -> Maybe (Infer Type)
-unify' = undefined
-
-unifyTypes :: [Type] -> Infer Type
-unifyTypes = undefined
-
-makeRecord :: Bool -> [(String, Type)] -> Infer Type
-makeRecord = undefined
-
-makeIntersect :: Type -> Type -> Infer Type
-makeIntersect = undefined
 
 extendRecord :: String -> Type -> Type -> Infer ()
 extendRecord name ty (TypeVar u) =
@@ -55,11 +40,11 @@ mergeSubstitution subst1 subst2 = do
   where f (u, ty) = do subst <- substitution
                        case Map.lookup u subst of
                          Nothing -> modifySubst (Map.insert u ty)
-                         Just ty' -> unify ty ty' >> return ()
+                         Just ty' -> void (unify ty ty')
 
 mergeSubstWith :: Substitution -> Infer ()
 mergeSubstWith subst = substitution >>= flip mergeSubstitution subst
-                         
+
 mergeEnv :: Env -> Env -> Infer ()
 mergeEnv env1 env2 = do
   modifyEnv (const env1)
@@ -73,11 +58,11 @@ mergeEnv env1 env2 = do
                 modifyEnv (Map.insert name (id, ty''))
 
 mergeEnvWith :: Env -> Infer ()
-mergeEnvWith env = environment >>= flip mergeEnv env            
-            
+mergeEnvWith env = environment >>= flip mergeEnv env
+
 emptyEnv :: Env
 emptyEnv = Map.empty
-              
+
 emptyArgOrd :: ArgOrd
 emptyArgOrd = Map.empty
 
@@ -90,24 +75,13 @@ infer decls = do
   (typeddecls, (subst, env, _)) <- runStateT (mapM inferDecl decls) empty
   return (List.map (replaceDecl subst) typeddecls,
           Map.map (second (replaceType subst)) env)
-  where empty = (emptySubst, emptyEnv, emptyArgOrd)        
+  where empty = (emptySubst, emptyEnv, emptyArgOrd)
 
 insertArgOrd :: String -> [String] -> Infer ()
 insertArgOrd name targs = modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
 
 subtype :: Type -> Type -> Infer Bool
 subtype = undefined
-
-local :: Infer a -> Infer (a, Substitution, Env, ArgOrd)
-local infer =
-  do env <- environment
-     argOrd <- argumentOrder
-     subst <- substitution
-     r <- infer
-     modifyEnv (const env)
-     modifyArgOrd (const argOrd)
-     modifySubst (const subst)
-     return (r, subst, env, argOrd)
 
 inferDecl :: Decl -> Infer TypedDecl
 inferDecl (TypeDecl name targs ty) = do
