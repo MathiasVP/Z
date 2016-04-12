@@ -1,9 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
 
-module Subtype where
+module Subtype(subtype) where
 import Prelude hiding (lookup)
 import Control.Monad
 import Control.Monad.State.Lazy
+import Control.Monad.Loops
 import Data.Map (Map)
 import Data.Map ((!))
 import qualified Data.Map as Map
@@ -157,62 +158,69 @@ subtype t1 t2 =
           t <- lookup bind2 s
           bind2' <- makeBindings s tys
           sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum ty t
-{-    sub trace bind1 bind2 assum subst (Union t11 t12) (Union t21 t22) = do
-      (b1121, subst1121) <- sub trace bind1 bind2 assum subst t11 t21
-      (b1221, subst1221) <- sub trace bind1 bind2 assum subst1121 t12 t21
-      (b1222, subst1222) <- sub trace bind1 bind2 assum subst1121 t12 t22
-
-      (b1122, subst1122) <- sub trace bind1 bind2 assum subst t11 t22
-      (b1221', subst1221') <- sub trace bind1 bind2 assum subst1122 t12 t21
-      (b1222', subst1222') <- sub trace bind1 bind2 assum subst1122 t12 t22
-      if b1121 && b1221 then return (True, subst1221)
-      else if b1121 && b1222 then return (True, subst1222)
-      else if b1122 && b1221' then return (True, subst1221')
-      else if b1122 && b1222' then return (True, subst1222')
-      else return (False, subst)
-    sub trace bind1 bind2 assum subst (Union t1 t2) ty = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty
-      return (b1 && b2, subst'')
-    sub trace bind1 bind2 assum subst ty (Union t1 t2) = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst ty t1
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
-      return (b1 && b2, subst'')
-    sub trace bind1 bind2 assum subst (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst tDom1 tDom2
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' tCod2 tCod1
-      return (b1 && b2, subst'')
-    sub trace bind1 bind2 assum subst (Tuple [t1]) t2 =
-      sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst t1 (Tuple [t2]) =
-      sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Tuple tys1) (Tuple tys2) =
+    sub trace bind1 bind2 assum (Union t11 t12) (Union t21 t22) = do
+      subst <- substitution
+      b1121 <- sub trace bind1 bind2 assum t11 t21
+      subst1121 <- substitution
+      b1221 <- sub trace bind1 bind2 assum t12 t21
+      if b1121 && b1221 then return True
+      else do
+        modifySubst (const subst1121)
+        b1222 <- sub trace bind1 bind2 assum t12 t22
+        if b1121 && b1222 then return True
+        else do
+          modifySubst (const subst)
+          b1122 <- sub trace bind1 bind2 assum t11 t22
+          subst1122 <- substitution
+          b1221' <- sub trace bind1 bind2 assum t12 t21
+          if b1122 && b1221' then return True
+          else do
+            modifySubst (const subst1122)
+            b1222' <- sub trace bind1 bind2 assum t12 t22
+            if b1122 && b1222' then return True
+            else do
+              modifySubst (const subst)
+              return False
+    sub trace bind1 bind2 assum (Union t1 t2) ty = do
+      b1 <- sub trace bind1 bind2 assum t1 ty
+      b2 <- sub trace bind1 bind2 assum t2 ty
+      return $ b1 && b2
+    sub trace bind1 bind2 assum ty (Union t1 t2) = do
+      b1 <- sub trace bind1 bind2 assum ty t1
+      b2 <- sub trace bind1 bind2 assum ty t2
+      return $ b1 && b2
+    sub trace bind1 bind2 assum (Arrow tDom1 tCod1) (Arrow tDom2 tCod2) = do
+      b1 <- sub trace bind1 bind2 assum tDom1 tDom2
+      b2 <- sub trace bind1 bind2 assum tCod2 tCod1
+      return $ b1 && b2
+    sub trace bind1 bind2 assum (Tuple [t1]) t2 =
+      sub trace bind1 bind2 assum t1 t2
+    sub trace bind1 bind2 assum t1 (Tuple [t2]) =
+      sub trace bind1 bind2 assum t1 t2
+    sub trace bind1 bind2 assum (Tuple tys1) (Tuple tys2) =
       if List.length tys1 == List.length tys2 then
-        foldM f (True, subst) (List.zip tys1 tys2)
-      else return (False, subst)
-      where f (True, subst) (t1, t2) = sub trace bind1 bind2 assum subst t1 t2
-            f (False, subst) _ = return (False, subst)
-    sub trace bind1 bind2 assum subst (Array t1) (Array t2) =
-      sub trace bind1 bind2 assum subst t1 t2
-    sub trace bind1 bind2 assum subst (Record _ fields1) (Record mut2 fields2) =
-      foldM f (True, subst) fields1
-      where f :: (Bool, Substitution) -> (String, Type) -> IO (Bool, Substitution)
-            f (_, subst) (name, ty) =
+        allM (uncurry $ sub trace bind1 bind2 assum) (List.zip tys1 tys2)
+      else return False
+    sub trace bind1 bind2 assum (Array t1) (Array t2) =
+      sub trace bind1 bind2 assum t1 t2
+    sub trace bind1 bind2 assum (Record _ fields1) (Record mut2 fields2) =
+      foldM f True fields1
+      where f _ (name, ty) =
              case List.lookup name fields2 of
-              Just ty' -> sub trace bind1 bind2 assum subst ty ty'
-              Nothing -> return (mut2, subst)
-    sub trace bind1 bind2 assum subst (Intersect t1 t2) ty = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst t1 ty
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' t2 ty
-      return (b1 && b2, subst'')
-    sub trace bind1 bind2 assum subst ty (Intersect t1 t2) = do
-      (b1, subst') <- sub trace bind1 bind2 assum subst ty t1
-      (b2, subst'') <- sub trace bind1 bind2 assum subst' ty t2
-      return (b1 || b2, subst'')
-    sub trace bind1 bind2 _ subst IntType IntType = return (True, subst)
-    sub trace bind1 bind2 _ subst IntType RealType = return (True, subst)
-    sub trace bind1 bind2 _ subst RealType RealType = return (True, subst)
-    sub trace bind1 bind2 _ subst BoolType BoolType = return (True, subst)
-    sub trace bind1 bind2 _ subst StringType StringType = return (True, subst)
-    sub trace bind1 bind2 _ _ _ _ = return False-}
+              Just ty' -> sub trace bind1 bind2 assum ty ty'
+              Nothing -> return mut2
+    sub trace bind1 bind2 assum (Intersect t1 t2) ty = do
+      b1 <- sub trace bind1 bind2 assum t1 ty
+      b2 <- sub trace bind1 bind2 assum t2 ty
+      return $ b1 && b2
+    sub trace bind1 bind2 assum ty (Intersect t1 t2) = do
+      b1 <- sub trace bind1 bind2 assum ty t1
+      b2 <- sub trace bind1 bind2 assum ty t2
+      return $ b1 || b2
+    sub trace bind1 bind2 _ IntType IntType = return True
+    sub trace bind1 bind2 _ IntType RealType = return True
+    sub trace bind1 bind2 _ RealType RealType = return True
+    sub trace bind1 bind2 _ BoolType BoolType = return True
+    sub trace bind1 bind2 _ StringType StringType = return True
+    sub trace bind1 bind2 _ _ _ = return False
   in sub Map.empty Map.empty Map.empty Map.empty t1 t2

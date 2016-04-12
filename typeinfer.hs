@@ -16,7 +16,7 @@ import Text.Groom
 import Types
 import TypedAst
 import Unification
-import Subtype hiding (subtype)
+import Subtype
 import Utils
 import TypeUtils
 import Replace
@@ -80,9 +80,6 @@ infer decls = do
 insertArgOrd :: String -> [String] -> Infer ()
 insertArgOrd name targs = modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
 
-subtype :: Type -> Type -> Infer Bool
-subtype = undefined
-
 inferDecl :: Decl -> Infer TypedDecl
 inferDecl (TypeDecl name targs ty) = do
   id <- lift $ fromString name
@@ -126,11 +123,15 @@ commMaybeInfer (Just x) =
     Nothing -> return (Just Nothing)
 commMaybeInfer Nothing = return Nothing
 
+commMaybeInfer' :: Maybe (Infer (Maybe Type)) -> Infer (Maybe (Maybe Type))
+commMaybeInfer' (Just i) = fmap Just i
+commMaybeInfer' Nothing = return Nothing
+
 inferMatchExpr :: Maybe Type -> MatchExpr -> Infer TypedMatchExpr
 inferMatchExpr tm (TupleMatchExpr mes) = do
   mes' <- do
     types <- lift $ replicateM (List.length mes) mkTypeVar
-    commMaybeInfer (liftM (unify' (Tuple types)) tm) >>= \case
+    commMaybeInfer' (fmap (unify' (Tuple types)) tm) >>= \case
       Just (Just (Tuple ts)) ->
         mapM (\(me, t) -> inferMatchExpr (Just t) me) (List.zip mes ts)
       Just Nothing -> do
@@ -144,7 +145,7 @@ inferMatchExpr tm (TupleMatchExpr mes) = do
 inferMatchExpr tm (ListMatchExpr mes) = do
   t <- lift mkTypeVar
   mes' <- do
-    commMaybeInfer (liftM (unify' (Array t)) tm) >>= \case
+    commMaybeInfer' (liftM (unify' (Array t)) tm) >>= \case
       Just (Just (Array t)) -> mapM (inferMatchExpr (Just t)) mes
       Just Nothing -> do
         lift (putStrLn $ "Match error: Couldn't unify expression '" ++
@@ -160,7 +161,7 @@ inferMatchExpr tm (RecordMatchExpr fields) = do
     fields' <- lift $ replicateM (List.length fields) mkTypeVar >>=
                         return . List.zip (normaliseFields fields)
     let record = Record False (List.map (\((s, _), ty) -> (s, ty)) fields')
-    commMaybeInfer (liftM (unify' record) tm) >>= \case
+    commMaybeInfer' (liftM (unify' record) tm) >>= \case
       Just (Just (Record _ fields')) ->
         mapM (\(entry, ty) -> f (Just ty) entry)
              (List.zip (normaliseFields fields) typesm)
@@ -184,8 +185,8 @@ inferMatchExpr tm (RecordMatchExpr fields) = do
 
 inferMatchExpr tm (TypedMatchExpr me ty) = do
   me' <- inferMatchExpr tm me
-  case unify' ty (typeOf me') of
-    Just infer -> infer >> return me'
+  unify' ty (typeOf me') >>= \case
+    Just _ -> return me'
     Nothing -> do
       lift (putStrLn $ "Error: Couldn't match expected type '" ++ show ty ++
                        "' with actual type '" ++ show (typeOf me') ++ "'.")
@@ -235,8 +236,8 @@ inferStatement (WhileStatement e s) = do
 inferStatement (ForStatement me e s) = do
   e' <- inferExpr e
   t <- lift mkTypeVar
-  t' <- case unify' (typeOf e') (Array t) of
-          Just infer -> infer >> return t
+  t' <- unify' (typeOf e') (Array t) >>= \case
+          Just _ -> return t
           Nothing -> do
             lift (putStrLn $ "Error: Cannot iterate over expression of type '" ++
                                 show (typeOf e') ++ "'.")
@@ -304,14 +305,12 @@ inferBinopExpr mkeExpr mkType e1 e2 = do
 
 mkMathOpType e1 e2 = do
   expType <- makeIntersect IntType RealType
-  case unify' (typeOf e1) expType of
-    Just i -> do
-      t1 <- i
-      case unify' (typeOf e2) expType of
-        Just i -> do
-          t2 <- i
-          case unify' t1 t2 of
-            Just i -> i >>= return
+  unify' (typeOf e1) expType >>= \case
+    Just t1 ->
+      unify' (typeOf e2) expType >>= \case
+        Just t2 ->
+          unify' t1 t2 >>= \case
+            Just t -> return t
             Nothing -> do
               lift (putStrLn $ "Cannot unify type '" ++ show t1 ++
                                "' with type '" ++ show t2 ++ "'.")
@@ -326,14 +325,12 @@ mkMathOpType e1 e2 = do
       return Error
 
 mkLogicalOpType e1 e2 = do
-  case unify' (typeOf e1) BoolType of
-    Just i -> do
-      t1 <- i
-      case unify' (typeOf e2) BoolType of
-        Just i -> do
-          t2 <- i
-          case unify' t1 t2 of
-            Just i -> i >> return BoolType
+  unify' (typeOf e1) BoolType >>= \case
+    Just t1 ->
+      unify' (typeOf e2) BoolType >>= \case
+        Just t2 ->
+          unify' t1 t2 >>= \case
+            Just _ -> return BoolType
             Nothing -> do
               lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
                                "' with type '" ++ show (typeOf e2) ++ "'.")
@@ -348,8 +345,8 @@ mkLogicalOpType e1 e2 = do
       return Error
 
 mkEqOpType e1 e2 =
-  case unify' (typeOf e1) (typeOf e2) of
-    Just i -> i >> return BoolType
+  unify' (typeOf e1) (typeOf e2) >>= \case
+    Just _ -> return BoolType
     Nothing -> do
       lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
                        "' with type '" ++ show (typeOf e2) ++ "'.")
@@ -357,10 +354,10 @@ mkEqOpType e1 e2 =
 
 mkRelOpType e1 e2 = do
   expectedType <- makeIntersect IntType RealType
-  case unify' (typeOf e1) expectedType of
-    Just i -> i >>
-      case unify' (typeOf e2) expectedType of
-        Just i -> i >> return BoolType
+  unify' (typeOf e1) expectedType >>= \case
+    Just _ ->
+      unify' (typeOf e2) expectedType >>= \case
+        Just _ -> return BoolType
         Nothing -> do
           lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e2) ++
                            "' with type '" ++ show expectedType ++ "'.")
@@ -420,9 +417,8 @@ inferExpr (DivExpr e1 e2) =
 
 inferExpr (UnaryMinusExpr e) = do
   e' <- inferExpr e
-  case unify' (typeOf e') (intersect IntType RealType) of
-    Just i -> do
-      t <- i
+  unify' (typeOf e') (intersect IntType RealType) >>= \case
+    Just t ->
       return (TUnaryMinusExpr e', t)
     Nothing -> do
       lift (putStrLn $ "Couldn't match expected type 'Int' or 'Real' " ++
@@ -431,10 +427,8 @@ inferExpr (UnaryMinusExpr e) = do
 
 inferExpr (BangExpr e) = do
   e' <- inferExpr e
-  case unify' (typeOf e') BoolType of
-    Just i -> do
-      t <- i
-      return (TBangExpr e', BoolType)
+  unify' (typeOf e') BoolType >>= \case
+    Just t -> return (TBangExpr e', BoolType)
     Nothing -> do
       lift (putStrLn $ "Couldn't match expected type 'Bool' with actual " ++
                        "type '" ++ show (typeOf e') ++ "'.")
@@ -550,11 +544,10 @@ inferLValueExpr _ (ArrayAccessExpr lve e) = do
   lve' <- inferLValueExpr Nothing lve
   e' <- inferExpr e
   arrayTy <- lift mkTypeVar
-  case unify' (typeOf lve') (Array arrayTy) of
-    Just i -> i >>
-      case unify' (typeOf e') IntType of
-        Just i -> i >>
-          return (TArrayAccessExpr lve' e', arrayTy)
+  unify' (typeOf lve') (Array arrayTy) >>= \case
+    Just _ ->
+      unify' (typeOf e') IntType >>= \case
+        Just _ -> return (TArrayAccessExpr lve' e', arrayTy)
         Nothing -> do
           lift $ putStrLn $ "Couldn't match expected type '" ++
                             show IntType ++ "' with actual type '" ++
