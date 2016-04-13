@@ -1,19 +1,19 @@
 {-# LANGUAGE LambdaCase #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 
 module Subtype(subtype) where
 import Prelude hiding (lookup)
 import Control.Monad
 import Control.Monad.State.Lazy
 import Control.Monad.Loops
-import Data.Map (Map)
-import Data.Map ((!))
+import Data.Map (Map, (!))
 import qualified Data.Map as Map
-import Data.Set (Set)
+import Data.Set()
 import qualified Data.Set as Set
 import qualified Data.List as List
 import Types
 import TypeUtils
-import TypedAst
+import TypedAst()
 
 data Variance
   = Positive
@@ -36,6 +36,7 @@ invert Positive = Negative
 invert Negative = Positive
 invert v = v
 
+maxNumberOfUnrolls :: Int
 maxNumberOfUnrolls = 100
 
 variance :: Type -> String -> Infer Variance
@@ -58,7 +59,7 @@ variance t s =
         v1 <- var trace v t1
         v2 <- var trace v t2
         return $ lub (invert v1) v2
-      var trace v (Forall u ty) = var trace v ty
+      var trace v (Forall _ ty) = var trace v ty
       var trace v (Union t1 t2) = do
         v1 <- var trace v t1
         v2 <- var trace v t2
@@ -66,7 +67,7 @@ variance t s =
       var trace v (Tuple ts) = do
         vs <- mapM (var trace v) ts
         return $ lubs vs
-      var trace v (Record b fields) = do
+      var trace v (Record _ fields) = do
         vs <- mapM (var trace v . snd) fields
         return $ lubs vs
       var trace v (Array ty) = var trace v ty
@@ -74,7 +75,7 @@ variance t s =
         v1 <- var trace v t1
         v2 <- var trace v t2
         return $ lub v1 v2
-      var trace v _ = return v
+      var _ v _ = return v
   in var Set.empty Bottom t
 
 lookup :: Bindings -> Identifier -> Infer Type
@@ -101,14 +102,14 @@ subtype t1 t2 =
     sub trace bind1 bind2 assum t1 (Forall u t2) =
       do TypeVar u' <- lift mkTypeVar
          sub trace bind1 bind2 assum t1 (rename u' u t2)
-    sub trace bind1 bind2 assum t1 t2@(TypeVar u) =
+    sub trace bind1 bind2 assum t1 t2@(TypeVar _) =
       follow t2 >>= \case
         TypeVar u -> do
           t1' <- follow t1
           modifySubst (Map.insert u t1')
           return True
         ty -> sub trace bind1 bind2 assum t1 ty
-    sub trace bind1 bind2 assum t1@(TypeVar u) t2 =
+    sub trace bind1 bind2 assum t1@(TypeVar _) t2 =
       follow t1 >>= \case
         TypeVar u -> do
           t2' <- follow t2
@@ -123,7 +124,7 @@ subtype t1 t2 =
           vars1 <- mapM (variance ty1) (Map.keys bind1)
           vars2 <- mapM (variance ty2) (Map.keys bind2)
           b1 <- foldM f True (List.zip3 tys1' tys2' vars1)
-          foldM f b1 (List.zip3 tys1' tys2' vars1)
+          foldM f b1 (List.zip3 tys1' tys2' vars2)
         Nothing
           | s1 == s2 && Map.notMember (stringOf s1) bind1 &&
             Map.notMember (stringOf s2) bind2 -> do
@@ -142,7 +143,7 @@ subtype t1 t2 =
                return (b1 && b2)
              f True (t1, t2, Positive) = sub trace bind1 bind2 assum t1 t2
              f True (t1, t2, Negative) = sub trace bind1 bind2 assum t2 t1
-             f True (t1, t2, Bottom) = return True
+             f True (_, _, Bottom) = return True
              f False _ = return False
     sub trace bind1 bind2 assum (Name s tys) ty =
       case Map.lookup s trace of
@@ -217,10 +218,10 @@ subtype t1 t2 =
       b1 <- sub trace bind1 bind2 assum ty t1
       b2 <- sub trace bind1 bind2 assum ty t2
       return $ b1 || b2
-    sub trace bind1 bind2 _ IntType IntType = return True
-    sub trace bind1 bind2 _ IntType RealType = return True
-    sub trace bind1 bind2 _ RealType RealType = return True
-    sub trace bind1 bind2 _ BoolType BoolType = return True
-    sub trace bind1 bind2 _ StringType StringType = return True
-    sub trace bind1 bind2 _ _ _ = return False
+    sub _ _ _ _ IntType IntType = return True
+    sub _ _ _ _ IntType RealType = return True
+    sub _ _ _ _ RealType RealType = return True
+    sub _ _ _ _ BoolType BoolType = return True
+    sub _ _ _ _ StringType StringType = return True
+    sub _ _ _ _ _ _ = return False
   in sub Map.empty Map.empty Map.empty Map.empty t1 t2

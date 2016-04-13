@@ -1,20 +1,20 @@
 {-# LANGUAGE TupleSections, LambdaCase #-}
-
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module InferFieldOffsets(construct) where
 
 import Prelude hiding (lookup)
 import Types
 import TypedAst
 import TypeUtils
-import Control.Arrow
+import Control.Arrow()
 import qualified Data.List as List
-import Data.Map(Map)
+import Data.Map(Map, (!))
 import Data.Set(Set)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Control.Monad.State.Lazy
-import Data.Traversable hiding (mapM)
-import Control.Applicative hiding (empty)
+import Data.Traversable()
+import Control.Applicative()
 
 newtype Var = Var Int
   deriving (Show, Ord, Eq)
@@ -25,21 +25,18 @@ newtype FieldMap = FieldMap (Map Type FieldMapEntry)
 
 newtype Equalities = Equalities (Set (Var, Var))
   deriving Show
-  
+
 type ST = (Var, FieldMap, Equalities)
 
 lookup :: Type -> FieldMap -> Maybe FieldMapEntry
 lookup ty (FieldMap fm) = Map.lookup ty fm
 
-insertEntry :: (Var -> State ST ()) ->
-               Type -> String -> State ST ()
-insertEntry hit ty s =
-  gets fieldmap >>= return . lookup ty >>= \case
-       Just entry ->
-         case Map.lookup s entry of
-           Just var -> hit var
+insertEntry :: (Var -> State ST ()) -> Type -> String -> State ST ()
+insertEntry hit ty s = do
+  Just entry <- fmap (lookup ty) (gets fieldmap)
+  hit (entry ! s)
   where fieldmap (_, fm, _)= fm
-           
+
 insert :: Type -> FieldMapEntry -> FieldMap -> FieldMap
 insert t e (FieldMap fm) = FieldMap (Map.insert t e fm)
 
@@ -49,19 +46,19 @@ add ty s e =
     case lookup ty fm of
      Just fields ->
       case Map.lookup s fields of
-        Just e' -> fm
+        Just _ -> fm
         Nothing -> insert ty (Map.insert s e fields) fm
      Nothing -> insert ty (Map.singleton s e) fm
-  where second f (a, b, c) = (a, f b, c) 
+  where second f (a, b, c) = (a, f b, c)
 
 construct :: Env -> [TypedDecl] -> (FieldMap, Equalities)
-construct env decls = (fm, eqs)
+construct _ decls = (fm, eqs)
   where (_, fm, eqs) = execState (mapM visitDecl decls)
                      (Var 0, FieldMap Map.empty, Equalities Set.empty)
 
 visitDecl :: TypedDecl -> State ST ()
 visitDecl (TFunDecl _ _ args ty stmt) =
-  mapM visitMatchExpr args >> visitStmt stmt >> visitType ty
+  mapM_ visitMatchExpr args >> visitStmt stmt >> visitType ty
 visitDecl (TTypeDecl _ _ ty) = visitType ty
 
 visitStmt :: TypedStatement -> State ST ()
@@ -115,7 +112,7 @@ visitExpr' (TListExpr es) = visitExprs es
 visitExpr' (TRecordExpr fields) = mapM_ (visitExpr . snd) fields
 visitExpr' (TTupleExpr es) = visitExprs es
 visitExpr' (TLValue lve) = visitLValueExpr lve
-visitExpr' (TLambdaExpr mes stmt) = mapM_ visitMatchExpr mes
+visitExpr' (TLambdaExpr mes stmt) = mapM_ visitMatchExpr mes >> visitStmt stmt
 
 visitMatchExpr :: TypedMatchExpr -> State ST ()
 visitMatchExpr (me, ty) = visitType ty >> visitMatchExpr' me
@@ -148,7 +145,7 @@ freshVar =
 
 equality :: Var -> Var -> Equalities -> Equalities
 equality v1 v2 (Equalities eqs) = Equalities $ Set.insert (v1, v2) eqs
-     
+
 addEquality :: Var -> Var -> State ST ()
 addEquality v1 v2 = modify (\(vars, fm, eqs) -> (vars, fm, equality v1 v2 eqs))
 
@@ -169,17 +166,13 @@ records (Union ty1 ty2) = records ty1 ++ records ty2
 records (Forall _ ty) = records ty
 records _ = []
 
-fields :: Type -> [(String, Type)]
-fields (Record _ fields) = fields
-fields _ = []
-
 visitType :: Type -> State ST ()
 visitType IntType = return ()
 visitType BoolType = return ()
 visitType StringType = return ()
 visitType RealType = return ()
 visitType Error = return ()
-visitType (Name s tys) = visitTypes tys
+visitType (Name _ tys) = visitTypes tys
 visitType (Array ty) = visitType ty
 visitType (Tuple tys) = visitTypes tys
 visitType ty@(Record _ fields) =
@@ -187,14 +180,14 @@ visitType ty@(Record _ fields) =
     mapM_ (uncurry $ add ty) (List.zip names vars) >> mapM_ visitType tys
   where n = List.length fields
         (names, tys) = List.unzip fields
-visitType (Forall uint ty) = visitType ty
+visitType (Forall _ ty) = visitType ty
 visitType (Arrow tyDom tyCod) = visitType tyDom >> visitType tyCod
 visitType (Union ty1 ty2) =
   visitType ty1 >> visitType ty2 >>
     let recs = [(r1, r2) | r1 <- records ty1, r2 <- records ty2]
     in mapM_ (uncurry unify) recs
 visitType (Intersect ty1 ty2) = visitType ty1 >> visitType ty2
-visitType (TypeVar uint) = return ()
+visitType (TypeVar _) = return ()
 
 visitTypes :: [Type] -> State ST ()
 visitTypes = mapM_ visitType

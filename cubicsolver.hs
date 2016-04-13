@@ -1,5 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module CubicSolver(Element(Element), Set(Set), Instance,
                    Constraint(Membership, Inclusion, CondInclusion), Solution,
                    empty, constraint, solution) where
@@ -8,7 +8,8 @@ import Prelude hiding ((++))
 import Control.Monad.State
 import qualified Data.Vector as Vector
 import Data.Vector((!?), (!), (//), (++), Vector)
-import qualified Data.List as List
+import Data.List()
+import Data.Maybe
 import qualified Data.Map as Map
 import Data.Map(Map)
 import qualified Data.Set as Set
@@ -27,10 +28,11 @@ newtype Node a b = Node (Set b, BitVector b)
 type BitVector b = Vector (Bool, [(Set b, Set b)])
 type Pos = Int
 
-data Instance a b = Instance (Gr (Node a b) ())
-                             (Map (Element a) Pos)
-                             (Map Pos (Element a))
-                             (Map (Set b) Gr.Node)
+data Instance a b
+  = Instance (Gr (Node a b) ())
+             (Map (Element a) Pos)
+             (Map Pos (Element a))
+             (Map (Set b) Gr.Node)
   deriving Show
 
 empty :: Instance a b
@@ -40,7 +42,7 @@ zeroBitsOfLength :: Int -> BitVector b
 zeroBitsOfLength k = Vector.replicate k (False, [])
 
 zeroBits :: State (Instance a b) (BitVector b)
-zeroBits = bitlength >>= return . zeroBitsOfLength
+zeroBits = fmap zeroBitsOfLength bitlength
 
 insertNode :: Ord b => Set b -> State (Instance a b) Gr.Node
 insertNode v = do
@@ -75,7 +77,7 @@ bitvectorOf v = do
   gets $ \(Instance gr _ _ _) ->
     let (Just (_, _, Node (_, bits), _), _) = Gr.match node gr
     in bits
-  
+
 bitlength :: State (Instance a b) Int
 bitlength = gets $ \(Instance _ tokmap _ _) -> Map.size tokmap
 
@@ -86,7 +88,7 @@ isSet v t = do
   case bits !? p of
     Just (b, _) -> return b
     Nothing -> return False
-        
+
 pairs :: (Ord a, Ord b) => Set b -> Element a ->
            State (Instance a b) [(Set b, Set b)]
 pairs v t = do
@@ -113,10 +115,7 @@ insertPair pair v t = do
                 tokmap invtokmap varmap
 
 entry :: BitVector b -> Pos -> (Bool, [(Set b, Set b)])
-entry bits p =
-  case bits !? p of
-    Just e  -> e
-    Nothing -> (False, [])
+entry bits p = fromMaybe (False, []) (bits !? p)
 
 set :: (Ord a, Ord b) => Set b -> Element a -> State (Instance a b) ()
 set v t = do
@@ -131,10 +130,10 @@ set v t = do
         else let bits' = bits ++ zeroBitsOfLength (k - n)
              in (bits' // [(p, (True, []))], [])
   modify (\(Instance gr tokmap invtokmap varmap) ->
-          let (Just (to, _, Node (_, bits), from), gr') = Gr.match node gr
+          let (Just (to, _, Node (_, _), from), gr') = Gr.match node gr
           in Instance ((to, node, Node (v, bits'), from) & gr')
                       tokmap invtokmap varmap)
-  mapM_ insertEdge pairs        
+  mapM_ insertEdge pairs
 
 insertEdge :: (Ord a, Ord b) => (Set b, Set b) -> State (Instance a b) ()
 insertEdge (src, dst) = do
@@ -171,7 +170,7 @@ constraint (CondInclusion t v x y) =
     else insertPair (x, y) v t
 
 solution :: (Ord a, Ord b) => Instance a b -> Solution a b
-solution (Instance gr tokmap invtokmap varmap) =
+solution (Instance gr _ invtokmap varmap) =
   Map.foldrWithKey extract Map.empty varmap
   where
     extract var node =
@@ -179,6 +178,6 @@ solution (Instance gr tokmap invtokmap varmap) =
       in Map.insert var (Set.unions . Vector.toList $
                           Vector.imap (tokens var) bits)
 
-    tokens var p (True, _) = Set.singleton tok
+    tokens _ p (True, _) = Set.singleton tok
       where tok = invtokmap Map.! p
     tokens _ _ (False, _) = Set.empty

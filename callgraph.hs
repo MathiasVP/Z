@@ -1,13 +1,12 @@
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module CallGraph where
-
 import Types
 import TypedAst
 import TypeUtils
-import qualified Data.Graph.Inductive.Graph as Gr
 import Data.Graph.Inductive.PatriciaTree(Gr)
 import Control.Monad.State
 import qualified Data.Map as Map
-import Data.Map(Map, (!))
+import Data.Map((!))
 import qualified CubicSolver as S
 import qualified Data.List as List
 import Data.Hash.MD5
@@ -17,25 +16,27 @@ newtype CallGraph = CallGraph (Gr Identifier ())
 
 type ST = S.Instance TLValueExpr TExpr
 
+construct :: Env -> [TypedDecl] -> S.Solution TLValueExpr TExpr
 construct env decls =
   S.solution $ execState (mapM_ (visitDecl env) decls) S.empty
 
  --TODO: Will fail for locally defined functions
 visitDecl :: Env -> TypedDecl -> State ST ()
-visitDecl env (TFunDecl name _ args ty stmt) =
-  modify (S.constraint (S.Membership (S.Element elem) (S.Set $ set))) >>
+visitDecl env (TFunDecl name _ _ _ stmt) =
+  modify (S.constraint (S.Membership (S.Element elem) (S.Set set))) >>
   visitStmt env stmt
   where elem = TVarExpr name
-        set = TLValue (TVarExpr name, snd $ env ! (stringOf name))
+        set = TLValue (TVarExpr name, snd $ env ! stringOf name)
 visitDecl _ _ = return ()
-  
+
+visitStmt :: Env -> TypedStatement -> State ST ()
 visitStmt env (TIfStatement e stmt Nothing) =
   visitExpr env e >> visitStmt env stmt
 visitStmt env (TIfStatement e stmt1 (Just stmt2)) =
   visitExpr env e >> visitStmt env stmt1 >> visitStmt env stmt2
 visitStmt env (TWhileStatement e stmt) =
   visitExpr env e >> visitStmt env stmt
-visitStmt env (TForStatement me e stmt) =
+visitStmt env (TForStatement _ e stmt) =
   visitExpr env e >> visitStmt env stmt
 visitStmt env (TCompoundStatement stmts) =
   mapM_ (visitStmt env) stmts
@@ -46,8 +47,8 @@ visitStmt env (TMatchStatement e matches) =
   visitExpr env e >> mapM_ visit matches
   where visit (_, stmt) = visitStmt env stmt
 visitStmt env (TReturnStatement e) = visitExpr env e
-visitStmt env TBreakStatement = return ()
-visitStmt env TContinueStatement = return ()
+visitStmt _ TBreakStatement = return ()
+visitStmt _ TContinueStatement = return ()
 visitStmt env (TDeclStatement decl) = visitDecl env decl
 
 constraintMatchExpr :: Env -> TypedExpr -> TypedMatchExpr -> State ST ()
@@ -60,27 +61,27 @@ constraintMatchExpr env (TRecordExpr exprFields, _)
   mapM_ constraintField exprFields
   where constraintField (name, expr) = constraintMatchExpr env expr (m ! name)
         m = Map.fromList matchFields
-constraintMatchExpr env (e, _) (TVarMatch id, ty) =
+constraintMatchExpr _ (e, _) (TVarMatch id, ty) =
   modify $ S.constraint (S.Inclusion (S.Set e)
              (S.Set (TLValue (TVarExpr id, ty))))
 --constraintMatchExpr' _ _ _ = return () --TODO: More cases
 
 constraintLValueExpr :: Env -> TypedExpr -> TypedLValueExpr -> State ST ()
-constraintLValueExpr env (e, _) (TVarExpr id, ty) =
+constraintLValueExpr _ (e, _) (TVarExpr id, ty) =
   modify $ S.constraint (S.Inclusion (S.Set e)
              (S.Set (TLValue (TVarExpr id, ty))))
-constraintLValueExpr env (e, _) (TFieldAccessExpr lve s, ty) =
+constraintLValueExpr _ (e, _) (TFieldAccessExpr lve s, ty) =
   modify $ S.constraint (S.Inclusion (S.Set e)
              (S.Set (TLValue (TFieldAccessExpr lve s, ty))))
-  
+
 visitExprs :: Env -> [TypedExpr] -> State ST ()
 visitExprs env = mapM_ (visitExpr env)
 
 visitExpr :: Env -> TypedExpr -> State ST ()
-visitExpr env (TIntExpr _, _) = return ()
-visitExpr env (TRealExpr _, _) = return ()
-visitExpr env (TBoolExpr _, _) = return ()
-visitExpr env (TStringExpr _, _) = return ()
+visitExpr _ (TIntExpr _, _) = return ()
+visitExpr _ (TRealExpr _, _) = return ()
+visitExpr _ (TBoolExpr _, _) = return ()
+visitExpr _ (TStringExpr _, _) = return ()
 visitExpr env (TOrExpr e1 e2, _) = visitExprs env [e1, e2]
 visitExpr env (TAndExpr e1 e2, _) = visitExprs env [e1, e2]
 visitExpr env (TEqExpr e1 e2, _) = visitExprs env [e1, e2]
@@ -95,26 +96,27 @@ visitExpr env (TMultExpr e1 e2, _) = visitExprs env [e1, e2]
 visitExpr env (TDivExpr e1 e2, _) = visitExprs env [e1, e2]
 visitExpr env (TUnaryMinusExpr e, _) = visitExpr env e
 visitExpr env (TBangExpr e, _) = visitExpr env e
-visitExpr env (TCallExpr e1 e2, ty) = error (show $ numberOfArgs (TCallExpr e1 e2, ty)) --visitExprs env [e1, e2]
+visitExpr env (TCallExpr e1 e2, ty) =
+  error (show $ numberOfArgs (TCallExpr e1 e2, ty)) --visitExprs env [e1, e2]
 visitExpr env (TListExpr es, _) = visitExprs env es
 visitExpr env (TRecordExpr fields, _) = mapM_ (visitExpr env . snd) fields
 visitExpr env (TTupleExpr es, _) = visitExprs env es
 visitExpr env (TLValue lve, _) = visitLValueExpr env lve
-visitExpr env (TLambdaExpr mes stmt, ty) =
-  modify (S.constraint (S.Membership (S.Element elem) (S.Set $ set)))
+visitExpr _ (TLambdaExpr mes stmt, ty) =
+  modify (S.constraint (S.Membership (S.Element elem) (S.Set set)))
   where name = placeholder (md5s (Str (show (TLambdaExpr mes stmt, ty))))
         elem = TVarExpr name
         set = TLValue (TVarExpr name, ty)
 
 numberOfArgs :: TypedExpr -> Int
-numberOfArgs (TCallExpr e1 e2, _) = numberOfArgs e1 + 1
+numberOfArgs (TCallExpr e1 _, _) = numberOfArgs e1 + 1
 numberOfArgs _ = 0
-        
+
 visitLValueExpr :: Env -> TypedLValueExpr -> State ST ()
-visitLValueExpr env (lve, ty) = visitLValueExpr' env lve
+visitLValueExpr env (lve, _) = visitLValueExpr' env lve
 
 visitLValueExpr' :: Env -> TLValueExpr -> State ST ()
-visitLValueExpr' env (TVarExpr _) = return ()
+visitLValueExpr' _ (TVarExpr _) = return ()
 visitLValueExpr' env (TFieldAccessExpr lve _) = visitLValueExpr env lve
 visitLValueExpr' env (TArrayAccessExpr lve e) =
   visitLValueExpr env lve >> visitExpr env e
