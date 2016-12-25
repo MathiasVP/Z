@@ -120,7 +120,9 @@ transTy' idents (Name name tys) =
         Just (uniq, _) -> do
           tys' <- mapM (transTy' idents) tys
           return $ TName (Identifier (name, uniq)) tys'
-        Nothing -> undefined
+        Nothing -> do
+          liftIO . putStrLn $ "Error: Undefined type name '" ++ name ++ "''"
+          return TError
 transTy' idents (Array ty) = TArray <$> transTy' idents ty
 transTy' idents (Tuple tys) = TTuple <$> mapM (transTy' idents) tys
 transTy' idents (Record b fields) =
@@ -133,9 +135,9 @@ transTy' idents (Union ty1 ty2) =
 inferDecl :: Decl -> Infer TypedDecl
 inferDecl (TypeDecl name targs ty) = do
   targs' <- lift $ mapM fromString targs
-  ty' <- transTy' (Map.fromList (List.map unIdentifier targs')) ty
   name' <- lift $ fromString name
   modifyEnv (Map.insert name (idOf name', ty'))
+  ty' <- transTy' (Map.fromList (List.map unIdentifier targs')) ty
   insertArgOrd name' targs'
   liftIO $ print $ TTypeDecl name' (List.foldr (TForall . idOf) ty' targs')
   return (TTypeDecl name' (List.foldr (TForall . idOf) ty' targs'))
@@ -155,7 +157,6 @@ inferDecl (FunDecl name tyArgs args retTy statement) = do
   addFuncs (allFuncs st)
   infRetTy <- mergeReturns statement'
   tyArgs' <- lift $ mapM fromString tyArgs
-  b <- subtype retTy' infRetTy
   ifM (subtype retTy' infRetTy)
     (do funTy' <- foldrM makeForall (makeArrow types retTy') types
         modifyEnv (Map.insert name (idOf funId, funTy'))

@@ -185,7 +185,7 @@ subtype t1 t2 =
     sub trace bind1 bind2 assum (TUnion t1 t2) ty = do
       b1 <- sub trace bind1 bind2 assum t1 ty
       b2 <- sub trace bind1 bind2 assum t2 ty
-      return $ b1 && b2
+      return $ b1 || b2
     sub trace bind1 bind2 assum ty (TUnion t1 t2) = do
       b1 <- sub trace bind1 bind2 assum ty t1
       b2 <- sub trace bind1 bind2 assum ty t2
