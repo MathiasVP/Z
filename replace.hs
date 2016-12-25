@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Replace where
-import Types
+import TTypes
 import TypeUtils
 import TypedAst
 import Control.Monad.State.Lazy
@@ -12,56 +12,56 @@ import Data.Set(Set)
 import Data.Map()
 import Unique
 
-replaceType :: Substitution -> Type -> Type
+replaceType :: Substitution -> TType -> TType
 replaceType subst ty =
-  let replace :: Set UniqueInt -> Type -> State (Set UniqueInt) Type
-      replace _ IntType = return IntType
-      replace _ BoolType = return BoolType
-      replace _ StringType = return StringType
-      replace _ RealType = return RealType
-      replace trace (Name s types) =
-        fmap (Name s) (mapM (replace trace) types)
-      replace trace (Array ty) = fmap Array (replace trace ty)
-      replace trace (Tuple [ty]) = replace trace ty
-      replace trace (Tuple types) =
-        fmap Tuple (mapM (replace trace) types)
-      replace trace (Record b fields) =
-        fmap (Record b) (mapM field fields)
+  let replace :: Set UniqueInt -> TType -> State (Set UniqueInt) TType
+      replace _ TIntType = return TIntType
+      replace _ TBoolType = return TBoolType
+      replace _ TStringType = return TStringType
+      replace _ TRealType = return TRealType
+      replace trace (TName s types) =
+        fmap (TName s) (mapM (replace trace) types)
+      replace trace (TArray ty) = fmap TArray (replace trace ty)
+      replace trace (TTuple [ty]) = replace trace ty
+      replace trace (TTuple types) =
+        fmap TTuple (mapM (replace trace) types)
+      replace trace (TRecord b fields) =
+        fmap (TRecord b) (mapM field fields)
         where field (s, ty) = replace trace ty >>= \ty -> return (s, ty)
-      replace trace (Arrow tDom tCod) = do
+      replace trace (TArrow tDom tCod) = do
         tDom' <- replace trace tDom
         tCod' <- replace trace tCod
-        return $ Arrow tDom' tCod'
-      replace trace (Union t1 t2) = do
+        return $ TArrow tDom' tCod'
+      replace trace (TUnion t1 t2) = do
         t1' <- replace trace t1
         t2' <- replace trace t2
-        return $ union t1' t2'
-      replace trace (Intersect t1 t2) = do
+        return $ tunion t1' t2'
+      replace trace (TIntersect t1 t2) = do
         t1' <- replace trace t1
         t2' <- replace trace t2
-        return $ intersect t1' t2'
-      replace trace (Forall u ty) = do
+        return $ tintersect t1' t2'
+      replace trace (TForall u ty) = do
         free <- get
         put (Set.insert u free)
         ty' <- replace trace ty
-        return $ Forall u ty'
-      replace trace (TypeVar u)
-        | Set.member u trace = return $ TypeVar u
+        return $ TForall u ty'
+      replace trace (TTypeVar u)
+        | Set.member u trace = return $ TTypeVar u
         | otherwise =
           gets (Set.member u) >>= \case
-            True -> return $ TypeVar u
+            True -> return $ TTypeVar u
             False ->
               case Map.lookup u subst of
                 Just ty -> replace (Set.insert u trace) ty
-                Nothing -> return $ TypeVar u
-      replace _ Error = return Error
+                Nothing -> return $ TTypeVar u
+      replace _ TError = return TError
   in evalState (replace Set.empty ty) Set.empty
 
 replaceDecl :: Substitution -> TypedDecl -> TypedDecl
 replaceDecl subst td =
   case td of
-    TTypeDecl s targs t ->
-      TTypeDecl s targs (replaceType subst t)
+    TTypeDecl s t ->
+      TTypeDecl s (replaceType subst t)
     TFunDecl name targs args retTy s ->
       TFunDecl name targs (List.map (replaceMatchExpr subst) args)
                           (replaceType subst retTy) (replaceStatement subst s)

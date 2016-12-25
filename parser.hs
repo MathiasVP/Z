@@ -43,7 +43,7 @@ funDecl = withPos $ do
     spaces'
     args <- sepBy1 matchExpr spaces'
     spaces'
-    typeM <- optionMaybe $ try $ string "=>" >> spaces' >> type_
+    typeM <- optionMaybe $ try $ string "->" >> spaces' >> type_
     spaces'
     char '='
     spaces
@@ -73,7 +73,7 @@ funDeclWithName name = do
     s <- block statement
     spaces
     return (name, fromMaybe [] typevarsM, args, typeM, makeCompound s)
-    
+
 decl = funDecl
    <|> typeDecl
 
@@ -152,7 +152,7 @@ nameType = do
             else Nothing
     tys <- option [] (char '<' >> sepBy1 type_ (spaces' >> char ',' >> spaces') <* char '>')
     spaces'
-    return $ fromMaybe (Name (placeholder name) tys) t
+    return $ fromMaybe (Name name tys) t
 
 arrowType :: IParser Type
 arrowType = chainr1 simpleType arrow
@@ -493,13 +493,14 @@ recordExpr = do
   char '}'
   spaces'
   return $ RecordExpr exprs
-  where recFieldAssign = do
-        name <- id_
-        spaces'
-        char '='
-        spaces'
-        e <- expr
-        return (name, e)
+  where
+    recFieldAssign = do
+      name <- id_
+      spaces'
+      char '='
+      spaces'
+      e <- expr
+      return (name, e)
 
 lvalueExpr :: IParser LValueExpr
 lvalueExpr = do

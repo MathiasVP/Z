@@ -11,21 +11,33 @@ import Control.Monad.State.Lazy
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
-import TypedAst()
-import Types
+import TypedAst
+import TTypes
 import Unique
 
-type Substitution = Map UniqueInt Type
-type Env = Map String (UniqueInt, Type)
-type ArgOrd = Map String (Map Int String)
-type Bindings = Map String Type
+type Substitution = Map UniqueInt TType
+type Env = Map String (UniqueInt, TType)
+type ArgOrd = Map Identifier (Map Int Identifier)
+type Bindings = Map Identifier TType
 
-data InferSt = InferSt { subst :: Substitution, env :: Env, argOrd :: ArgOrd }
+data FunctionInfo
+  = FunctionInfo { name :: Identifier
+                  , targs :: [String]
+                  , args :: [TypedMatchExpr]
+                  , funty :: TType
+                  , body :: TypedStatement }
+  deriving Show
+
+data InferSt = InferSt { subst :: Substitution
+                       , env :: Env
+                       , argOrd :: ArgOrd
+                       , allFuncs :: Map Identifier FunctionInfo }
 
 emptySt :: InferSt
 emptySt = InferSt { subst = Map.empty
                   , env = Map.empty
-                  , argOrd = Map.empty }
+                  , argOrd = Map.empty
+                  , allFuncs = Map.empty }
 
 type Infer a = StateT InferSt IO a
 
@@ -48,6 +60,16 @@ modifyEnv f = modify $ \st -> st { env = f (env st) }
 modifyArgOrd :: (ArgOrd -> ArgOrd) -> Infer ()
 modifyArgOrd f = modify $ \st -> st { argOrd = f (argOrd st) }
 
+addFunc :: Identifier -> [String] -> [TypedMatchExpr]
+            -> TType -> TypedStatement -> Infer ()
+addFunc name targs mes ty stmt =
+  modify $ \st -> st { allFuncs =
+    Map.insert name FunctionInfo{ name = name
+                                , targs = targs
+                                , args = mes
+                                , funty = ty
+                                , body = stmt} (allFuncs st) }
+
 exprOf :: (a, b) -> a
 exprOf = fst
 
@@ -62,141 +84,138 @@ equalRecordFields fields1 fields2 =
   let f fields = List.map fst (normaliseFields fields)
   in f fields1 == f fields2
 
-follow :: Type -> Infer Type
+follow :: TType -> Infer TType
 follow = fol Set.empty
   where
-    fol visited (TypeVar u)
-      | Set.member u visited = return $ TypeVar u
+    fol visited (TTypeVar u)
+      | Set.member u visited = return $ TTypeVar u
       | otherwise =
         substitution >>= \subst ->
           case Map.lookup u subst of
             Just t -> fol (Set.insert u visited) t
-            Nothing -> return $ TypeVar u
-    fol visited (Array ty) = fmap Array (fol visited ty)
-    fol visited (Tuple types) = fmap Tuple (mapM (fol visited) types)
-    fol visited (Record b fields) =
+            Nothing -> return $ TTypeVar u
+    fol visited (TArray ty) = fmap TArray (fol visited ty)
+    fol visited (TTuple types) = fmap TTuple (mapM (fol visited) types)
+    fol visited (TRecord b fields) =
       let f (s, ty) = fmap (s,) (fol visited ty)
-      in fmap (Record b) (mapM f fields)
-    fol visited (Arrow tDom tCod) = do
+      in fmap (TRecord b) (mapM f fields)
+    fol visited (TArrow tDom tCod) = do
       tDom' <- fol visited tDom
       tCod' <- fol visited tCod
-      return $ Arrow tDom' tCod'
-    fol visited (Union t1 t2) = do
+      return $ TArrow tDom' tCod'
+    fol visited (TUnion t1 t2) = do
       t1' <- fol visited t1
       t2' <- fol visited t2
-      return $ union t1' t2'
-    fol visited (Forall u ty) = fmap (Forall u) (fol visited ty)
-    fol visited (Intersect t1 t2) = do
+      return $ tunion t1' t2'
+    fol visited (TForall u ty) = fmap (TForall u) (fol visited ty)
+    fol visited (TIntersect t1 t2) = do
       t1' <- fol visited t1
       t2' <- fol visited t2
-      return $ Intersect t1' t2'
+      return $ TIntersect t1' t2'
     fol _ t = return t
 
-free :: Type -> Infer Bool
+free :: TType -> Infer Bool
 free ty =
   follow ty >>= \case
-    TypeVar _ -> return True
+    TTypeVar _ -> return True
     _         -> return False
 
-makeBindings :: Identifier -> [Type] -> Infer Bindings
+makeBindings :: Identifier -> [TType] -> Infer Bindings
 makeBindings s types = do
   argOrd <- argumentOrder
-  case Map.lookup (stringOf s) argOrd of
+  case Map.lookup s argOrd of
     Just a -> return $ Map.fromList $ List.zip (Map.elems a) types
     Nothing -> return Map.empty
 
-instansiate :: String -> Type -> Type -> Type
+instansiate :: Identifier -> TType -> TType -> TType
 instansiate name ty t =
-  let inst (Name s [])
-        | stringOf s == name = ty
-        | otherwise = Name s []
-      inst (Name s tys) = Name s (List.map inst tys)
-      inst (Forall u ty) = Forall u (inst ty)
-      inst (Arrow tDom tCod) = Arrow (inst tDom) (inst tCod)
-      inst (Union t1 t2) = union (inst t1) (inst t2)
-      inst (Tuple tys) = Tuple (List.map inst tys)
-      inst (Record b fields) = Record b (List.map (second inst) fields)
-      inst (Array ty) = Array (inst ty)
-      inst (TypeVar u) = TypeVar u
-      inst (Intersect t1 t2) = intersect (inst t1) (inst t2)
+  let inst (TName s [])
+        | s == name = ty
+        | otherwise = TName s []
+      inst (TName s tys) = TName s (List.map inst tys)
+      inst (TForall u ty) = TForall u (inst ty)
+      inst (TArrow tDom tCod) = TArrow (inst tDom) (inst tCod)
+      inst (TUnion t1 t2) = tunion (inst t1) (inst t2)
+      inst (TTuple tys) = TTuple (List.map inst tys)
+      inst (TRecord b fields) = TRecord b (List.map (second inst) fields)
+      inst (TArray ty) = TArray (inst ty)
+      inst (TTypeVar u) = TTypeVar u
+      inst (TIntersect t1 t2) = tintersect (inst t1) (inst t2)
       inst t = t
   in inst t
 
-instansiates :: Type -> Map String Type -> Type
+instansiates :: TType -> Map Identifier TType -> TType
 instansiates = Map.foldrWithKey instansiate
 
-mkTypeVar :: IO Type
-mkTypeVar = fmap TypeVar unique
+mkTypeVar :: IO TType
+mkTypeVar = fmap TTypeVar unique
 
-makeArrow :: [Type] -> Type -> Type
-makeArrow types retTy = List.foldr Arrow retTy types
+makeArrow :: [TType] -> TType -> TType
+makeArrow types retTy = List.foldr TArrow retTy types
 
-typevars :: Type -> [UniqueInt]
-typevars (TypeVar u) = [u]
-typevars (Forall u ty) =
+typevars :: TType -> [UniqueInt]
+typevars (TTypeVar u) = [u]
+typevars (TForall u ty) =
   if u `elem` uniques then uniques
   else u : uniques
   where uniques = typevars ty
-typevars (Arrow t1 t2) = List.nub $ typevars t1 ++ typevars t2
-typevars (Union t1 t2) = List.nub $ typevars t1 ++ typevars t2
-typevars (Tuple tys) = List.nub $ List.concatMap typevars tys
-typevars (Record _ fields) = List.nub $ List.concatMap (typevars . snd) fields
-typevars (Array ty) = typevars ty
-typevars (Intersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars (TArrow t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars (TUnion t1 t2) = List.nub $ typevars t1 ++ typevars t2
+typevars (TTuple tys) = List.nub $ List.concatMap typevars tys
+typevars (TRecord _ fields) = List.nub $ List.concatMap (typevars . snd) fields
+typevars (TArray ty) = typevars ty
+typevars (TIntersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars _ = []
 
-isQuantified :: UniqueInt -> Type -> Infer Bool
+isQuantified :: UniqueInt -> TType -> Infer Bool
 isQuantified u = isQuant
   where
-    isQuant (Forall u' ty) = do
-      t <- follow (TypeVar u')
-      t' <- follow (TypeVar u)
+    isQuant (TForall u' ty) = do
+      t <- follow (TTypeVar u')
+      t' <- follow (TTypeVar u)
       if t == t' then return True else isQuant ty
-    isQuant (Arrow t1 t2) = isQuant t1 `or` isQuant t2
-    isQuant (Union t1 t2) = isQuant t1 `or` isQuant t2
-    isQuant (Tuple tys) = anyM isQuant tys
-    isQuant (Record _ fields) = anyM (isQuant . snd) fields
-    isQuant (Array ty) = isQuant ty
-    isQuant (Intersect t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant (TArrow t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant (TUnion t1 t2) = isQuant t1 `or` isQuant t2
+    isQuant (TTuple tys) = anyM isQuant tys
+    isQuant (TRecord _ fields) = anyM (isQuant . snd) fields
+    isQuant (TArray ty) = isQuant ty
+    isQuant (TIntersect t1 t2) = isQuant t1 `or` isQuant t2
     isQuant _ = return False
     or = liftM2 (||)
 
-rename :: UniqueInt -> UniqueInt -> Type -> Type
+rename :: UniqueInt -> UniqueInt -> TType -> TType
 rename new old ty =
-  let re (Name s tys) = Name s (List.map re tys)
-      re (Forall u ty) = Forall u (re ty)
-      re (Arrow tDom tCod) = Arrow (re tDom) (re tCod)
-      re (Union t1 t2) = union (re t1) (re t2)
-      re (Tuple tys) = Tuple (List.map re tys)
-      re (Record b fields) = Record b (List.map (second re) fields)
-      re (Array ty) = Array (re ty)
-      re (TypeVar u)
-        | u == old = TypeVar new
-        | otherwise = TypeVar u
-      re (Intersect t1 t2) = intersect (re t1) (re t2)
+  let re (TName s tys) = TName s (List.map re tys)
+      re (TForall u ty) = TForall u (re ty)
+      re (TArrow tDom tCod) = TArrow (re tDom) (re tCod)
+      re (TUnion t1 t2) = tunion (re t1) (re t2)
+      re (TTuple tys) = TTuple (List.map re tys)
+      re (TRecord b fields) = TRecord b (List.map (second re) fields)
+      re (TArray ty) = TArray (re ty)
+      re (TTypeVar u)
+        | u == old = TTypeVar new
+        | otherwise = TTypeVar u
+      re (TIntersect t1 t2) = tintersect (re t1) (re t2)
       re t = t
   in re ty
 
 local :: Infer a -> Infer (a, InferSt)
 local infer =
-  do env' <- environment
-     argOrd' <- argumentOrder
-     subst' <- substitution
+  do st <- get
      r <- infer
-     modifyEnv (const env')
-     modifyArgOrd (const argOrd')
-     modifySubst (const subst')
-     return (r, InferSt {env = env', subst = subst', argOrd = argOrd'})
+     st' <- get
+     put st
+     return (r, st')
 
-makeForall :: Type -> Type -> Infer Type
+makeForall :: TType -> TType -> Infer TType
 makeForall ty1 ty2 = do
   ty1' <- follow ty1
   foldrM make ty2 (typevars ty1')
   where make u ty = do
           isquant <- isQuantified u ty
-          isfree <- free (TypeVar u)
+          isfree <- free (TTypeVar u)
           if isquant || not isfree then follow ty
           else do
-          TypeVar u' <- lift mkTypeVar
-          ty' <- follow ty
-          return $ Forall u' (rename u' u ty')
+            TTypeVar u' <- lift mkTypeVar
+            ty' <- follow ty
+            return $ TForall u' (rename u' u ty')

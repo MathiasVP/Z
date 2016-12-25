@@ -74,21 +74,21 @@ indentM sm =
   xsm >>= \xs ->
   ysm >>= \ys ->
   return (xs ++ ys)
-  
+
 infixr 5 <++>
-  
+
 (<<+>) :: Monad m => m [a] -> [a] -> m [a]
 (<<+>) xsm ys =
   xsm >>= \xs ->
   return (xs ++ ys)
-  
+
 infixr 5 <<+>
-  
+
 (<+>>) :: Monad m => [a] -> m [a] -> m [a]
 (<+>>) xs ysm =
   ysm >>= \ys ->
   return (xs ++ ys)
-  
+
 incr :: Int -> State Int String
 incr n = modify (n +) >> return ""
 
