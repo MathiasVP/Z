@@ -1,7 +1,6 @@
 {-# LANGUAGE TupleSections, LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module TypeUtils where
-import Data.Map (Map)
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Loops
@@ -9,20 +8,23 @@ import Data.Ord
 import Data.Foldable
 import Control.Monad.State.Lazy
 import qualified Data.Map as Map
+import Data.Map (Map)
 import qualified Data.Set as Set
+import Data.Set(Set)
 import qualified Data.List as List
 import TypedAst
 import TTypes
 import Unique
 
-type Substitution = Map UniqueInt TType
+type Substitution = Map Identifier TType
 type Env = Map String (UniqueInt, TType)
 type ArgOrd = Map Identifier (Map Int Identifier)
 type Bindings = Map Identifier TType
+type Trace = Set Identifier
 
 data FunctionInfo
   = FunctionInfo { name :: Identifier
-                  , targs :: [String]
+                  , targs :: [Identifier]
                   , args :: [TypedMatchExpr]
                   , funty :: TType
                   , body :: TypedStatement }
@@ -60,7 +62,7 @@ modifyEnv f = modify $ \st -> st { env = f (env st) }
 modifyArgOrd :: (ArgOrd -> ArgOrd) -> Infer ()
 modifyArgOrd f = modify $ \st -> st { argOrd = f (argOrd st) }
 
-addFunc :: Identifier -> [String] -> [TypedMatchExpr]
+addFunc :: Identifier -> [Identifier] -> [TypedMatchExpr]
             -> TType -> TypedStatement -> Infer ()
 addFunc name targs mes ty stmt =
   modify $ \st -> st { allFuncs =
@@ -87,13 +89,13 @@ equalRecordFields fields1 fields2 =
 follow :: TType -> Infer TType
 follow = fol Set.empty
   where
-    fol visited (TTypeVar u)
-      | Set.member u visited = return $ TTypeVar u
+    fol visited (TTypeVar ident)
+      | Set.member ident visited = return $ TTypeVar ident
       | otherwise =
         substitution >>= \subst ->
-          case Map.lookup u subst of
-            Just t -> fol (Set.insert u visited) t
-            Nothing -> return $ TTypeVar u
+          case Map.lookup ident subst of
+            Just t -> fol (Set.insert ident visited) t
+            Nothing -> return $ TTypeVar ident
     fol visited (TArray ty) = fmap TArray (fol visited ty)
     fol visited (TTuple types) = fmap TTuple (mapM (fol visited) types)
     fol visited (TRecord b fields) =
@@ -118,14 +120,21 @@ free :: TType -> Infer Bool
 free ty =
   follow ty >>= \case
     TTypeVar _ -> return True
-    _         -> return False
+    _          -> return False
 
-makeBindings :: Identifier -> [TType] -> Infer Bindings
-makeBindings s types = do
+-- TODO: FIXME
+makeBindings :: Identifier -> Bindings -> [TType] -> Infer Bindings
+makeBindings s binds types = do
   argOrd <- argumentOrder
   case Map.lookup s argOrd of
-    Just a -> return $ Map.fromList $ List.zip (Map.elems a) types
-    Nothing -> return Map.empty
+    Just a ->
+      let binds' = Map.fromList $ List.zip (Map.elems a) types
+      in return $
+        Map.foldrWithKey (\ident newTy binds ->
+         case Map.lookup ident binds of
+           Just oldTy -> Map.insert ident (instansiate ident newTy oldTy) binds
+           Nothing -> Map.insert ident newTy binds) binds binds'
+    Nothing -> return binds
 
 instansiate :: Identifier -> TType -> TType -> TType
 instansiate name ty t =
@@ -144,20 +153,20 @@ instansiate name ty t =
       inst t = t
   in inst t
 
-instansiates :: TType -> Map Identifier TType -> TType
+instansiates :: TType -> Bindings -> TType
 instansiates = Map.foldrWithKey instansiate
 
 mkTypeVar :: IO TType
-mkTypeVar = fmap TTypeVar unique
+mkTypeVar = TTypeVar <$> fromString "t"
 
 makeArrow :: [TType] -> TType -> TType
 makeArrow types retTy = List.foldr TArrow retTy types
 
-typevars :: TType -> [UniqueInt]
-typevars (TTypeVar u) = [u]
-typevars (TForall u ty) =
-  if u `elem` uniques then uniques
-  else u : uniques
+typevars :: TType -> [Identifier]
+typevars (TTypeVar ident) = [ident]
+typevars (TForall ident ty) =
+  if ident `elem` uniques then uniques
+  else ident : uniques
   where uniques = typevars ty
 typevars (TArrow t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars (TUnion t1 t2) = List.nub $ typevars t1 ++ typevars t2
@@ -167,12 +176,12 @@ typevars (TArray ty) = typevars ty
 typevars (TIntersect t1 t2) = List.nub $ typevars t1 ++ typevars t2
 typevars _ = []
 
-isQuantified :: UniqueInt -> TType -> Infer Bool
-isQuantified u = isQuant
+isQuantified :: Identifier -> TType -> Infer Bool
+isQuantified ident = isQuant
   where
-    isQuant (TForall u' ty) = do
-      t <- follow (TTypeVar u')
-      t' <- follow (TTypeVar u)
+    isQuant (TForall ident' ty) = do
+      t' <- follow (TTypeVar ident')
+      t <- follow (TTypeVar ident)
       if t == t' then return True else isQuant ty
     isQuant (TArrow t1 t2) = isQuant t1 `or` isQuant t2
     isQuant (TUnion t1 t2) = isQuant t1 `or` isQuant t2
@@ -183,7 +192,7 @@ isQuantified u = isQuant
     isQuant _ = return False
     or = liftM2 (||)
 
-rename :: UniqueInt -> UniqueInt -> TType -> TType
+rename :: Identifier -> Identifier -> TType -> TType
 rename new old ty =
   let re (TName s tys) = TName s (List.map re tys)
       re (TForall u ty) = TForall u (re ty)
@@ -192,9 +201,9 @@ rename new old ty =
       re (TTuple tys) = TTuple (List.map re tys)
       re (TRecord b fields) = TRecord b (List.map (second re) fields)
       re (TArray ty) = TArray (re ty)
-      re (TTypeVar u)
-        | u == old = TTypeVar new
-        | otherwise = TTypeVar u
+      re (TTypeVar ident)
+        | ident == old = TTypeVar new
+        | otherwise = TTypeVar ident
       re (TIntersect t1 t2) = tintersect (re t1) (re t2)
       re t = t
   in re ty

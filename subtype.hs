@@ -6,14 +6,18 @@ import Prelude hiding (lookup)
 import Control.Monad
 import Control.Monad.State.Lazy
 import Control.Monad.Loops
-import Data.Map (Map, (!))
+import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set()
 import qualified Data.Set as Set
 import qualified Data.List as List
+import Data.Maybe
 import TTypes
 import TypeUtils
 import TypedAst()
+
+(!) :: (Ord a, Show a, Show b) => Map a b -> a -> b
+(!) m k = fromMaybe (error $ show k ++ " ∉ " ++ show m) (Map.lookup k m)
 
 data Variance
   = Positive
@@ -37,7 +41,7 @@ invert Negative = Positive
 invert v = v
 
 maxNumberOfUnrolls :: Int
-maxNumberOfUnrolls = 100
+maxNumberOfUnrolls = 10
 
 variance :: TType -> Identifier -> Infer Variance
 variance t s =
@@ -145,19 +149,19 @@ subtype t1 t2 =
              f True (t1, t2, Negative) = sub trace bind1 bind2 assum t2 t1
              f True (_, _, Bottom) = return True
              f False _ = return False
-    sub trace bind1 bind2 assum (TName s tys) ty =
+    sub trace bind1 bind2 assum (TName s tys) ty = do
       case Map.lookup s trace of
-        Just n -> return $ n < maxNumberOfUnrolls
-        Nothing -> do
+        Just n | n >= maxNumberOfUnrolls -> return False
+        _ -> do
           t <- lookup bind1 s
-          bind1' <- makeBindings s tys
+          bind1' <- makeBindings s bind1 tys
           sub (updateOrElse (+1) 0 s trace) bind1' bind2 assum t ty
     sub trace bind1 bind2 assum ty (TName s tys) =
       case Map.lookup s trace of
-        Just n -> return $ n < maxNumberOfUnrolls
-        Nothing -> do
+        Just n | n >= maxNumberOfUnrolls -> return False
+        _ -> do
           t <- lookup bind2 s
-          bind2' <- makeBindings s tys
+          bind2' <- makeBindings s bind2 tys
           sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum ty t
     sub trace bind1 bind2 assum (TUnion t11 t12) (TUnion t21 t22) = do
       subst <- substitution
@@ -184,7 +188,9 @@ subtype t1 t2 =
               return False
     sub trace bind1 bind2 assum (TUnion t1 t2) ty = do
       b1 <- sub trace bind1 bind2 assum t1 ty
+      --liftIO $ putStrLn $ show t1 ++ " <: " ++ show ty ++ ": " ++ show b1
       b2 <- sub trace bind1 bind2 assum t2 ty
+      --liftIO $ putStrLn $ show t2 ++ " <: " ++ show ty ++ ": " ++ show b2
       return $ b1 || b2
     sub trace bind1 bind2 assum ty (TUnion t1 t2) = do
       b1 <- sub trace bind1 bind2 assum ty t1

@@ -6,10 +6,12 @@ import Data.List()
 import Data.Hashable
 import Hash
 
-data TypedDecl
-  = TTypeDecl Identifier TType
-  | TFunDecl Identifier [Identifier] [TypedMatchExpr] TType TypedStatement
+data TypedDeclData
+  = TTypeDecl TType
+  | TFunDecl [Identifier] [TypedMatchExpr] TType TypedStatement
     deriving (Show, Ord, Eq)
+
+type TypedDecl = (Identifier, TypedDeclData)
 
 data TExpr = TIntExpr Int
            | TRealExpr Double
@@ -165,8 +167,8 @@ instance Hashable TExpr where
   hashWithSalt n (TLambdaExpr mes s) =
     hashWithSalt n (mes, s) `combine` 73
 
-instance Hashable TypedDecl where
-  hashWithSalt n (TTypeDecl name ty) =
-    hashWithSalt n (name, ty) `combine` 23
-  hashWithSalt n (TFunDecl name tyargs mes ty s) =
-    hashWithSalt n (name, tyargs, mes, ty, s) `combine` 31
+instance Hashable TypedDeclData where
+  hashWithSalt n (TTypeDecl ty) =
+    hashWithSalt n ty `combine` 23
+  hashWithSalt n (TFunDecl typeargs mes ty s) =
+    hashWithSalt n (typeargs, mes, ty, s) `combine` 31

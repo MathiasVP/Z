@@ -51,8 +51,7 @@ lookup bind s = do
 unify :: TType -> TType ->  Infer TType
 unify t1 t2 =
   let
-    uni :: Set Identifier -> Bindings -> Bindings ->
-             TType -> TType -> Infer TType
+    uni :: Trace -> Bindings -> Bindings -> TType -> TType -> Infer TType
     uni trace bind1 bind2 (TTypeVar u) (TTypeVar u') = do
       t <- follow (TTypeVar u)
       t' <- follow (TTypeVar u')
@@ -68,10 +67,11 @@ unify t1 t2 =
           return t
         (t, t') ->
           uni trace bind1 bind2 t t'
-    uni trace bind1 bind2 (TForall _ t1) t2 =
-      uni trace bind1 bind2 t1 t2
+    uni trace bind1 bind2 (TForall u t1) t2 = do
+      t <- liftIO mkTypeVar
+      uni trace (Map.insert u t bind1) bind2 t1 t2
     uni trace bind1 bind2 t1 (TForall u t2) =
-      uni trace bind1 bind2 (TForall u t2) t1
+      uni trace bind2 bind1 (TForall u t2) t1
     uni trace bind1 bind2 (TTypeVar u) t =
       follow (TTypeVar u) >>= \case
         TTypeVar u -> do
@@ -81,12 +81,16 @@ unify t1 t2 =
           t'' <- uni trace bind1 bind2 t t'
           modifySubst (Map.insert u t'')
           return t''
-    uni trace bind1 bind2 t (TTypeVar u) = uni trace bind1 bind2 (TTypeVar u) t
+    uni trace bind1 bind2 t (TTypeVar u) = uni trace bind2 bind1 (TTypeVar u) t
     uni trace bind1 bind2 t1@(TName s1 types1) t2@(TName s2 types2) = do
+      liftIO $ putStrLn $ "Looking up " ++ show s1 ++ " in " ++ show bind1
       t1' <- lookup bind1 s1
+      liftIO $ putStrLn $ "Found " ++ show t1'
+      liftIO $ putStrLn $ "Looking up " ++ show s2 ++ " in " ++ show bind2
       t2' <- lookup bind2 s2
-      bind1' <- makeBindings s1 types1
-      bind2' <- makeBindings s2 types2
+      liftIO $ putStrLn $ "Found " ++ show t2'
+      bind1' <- makeBindings s1 bind1 types1
+      bind2' <- makeBindings s2 bind2 types2
       case (Set.member s1 trace, Set.member s2 trace) of
         (True, True) ->
           return $ tunion (instansiates t1 bind1') (instansiates t2 bind2')
@@ -97,23 +101,24 @@ unify t1 t2 =
         (False, False) ->
           uni (inserts trace [s1, s2]) bind1' bind2' t1' t2'
     uni trace bind1 bind2 t1@(TName s types) t2 = do
+      liftIO $ putStrLn $ "Looking up " ++ show s ++ " in " ++ show bind1
       t <- lookup bind1 s
-      bind <- makeBindings s types
+      liftIO $ putStrLn $ "Found " ++ show t
+      bind1' <- makeBindings s bind1 types
       if Set.member s trace then
-        return $ tunion (instansiates t1 bind) (instansiates t2 bind2)
-      else uni (Set.insert s trace) bind bind2 t t2
+        return $ tunion (instansiates t1 bind1') (instansiates t2 bind2)
+      else uni (Set.insert s trace) bind1' bind2 t t2
     uni trace bind1 bind2 t1 (TName s types) =
-      uni trace bind1 bind2 (TName s types) t1
-    uni trace bind1 bind2 (TArray t1) (TArray t2) = do
-      t <- uni trace bind1 bind2 t1 t2
-      return $ TArray t
+      uni trace bind2 bind1 (TName s types) t1
+    uni trace bind1 bind2 (TArray t1) (TArray t2) =
+      fmap TArray (uni trace bind1 bind2 t1 t2)
     uni trace bind1 bind2 (TTuple [t1]) (TTuple [t2]) = do
       t <- uni trace bind1 bind2 t1 t2
       return $ TTuple [t]
     uni trace bind1 bind2 (TTuple [t1]) t2 =
       uni trace bind1 bind2 t1 t2
     uni trace bind1 bind2 t1 (TTuple [t2]) =
-      uni trace bind1 bind2 (TTuple [t2]) t1
+      uni trace bind2 bind1 (TTuple [t2]) t1
     uni trace bind1 bind2 (TTuple types1) (TTuple types2) =
       if List.length types1 == List.length types2 then do
         types <- unifyPairwise trace bind1 bind2 types1 types2
@@ -134,6 +139,7 @@ unify t1 t2 =
       tyCod <- uni trace bind1 bind2 tyCod1 tyCod2
       return $ TArrow tyDom tyCod
     -- TODO: Not sure if this is correct. Should go through all possibilities
+    --       like in uni'.
     uni trace bind1 bind2 (TUnion t1 t2) (TUnion t3 t4) = do
       t13 <- uni trace bind1 bind2 t1 t3
       t24 <- uni trace bind1 bind2 t2 t4
@@ -145,11 +151,11 @@ unify t1 t2 =
            return $ tunion (TIntersect t1 t2) (TIntersect t3 t4)
          else return $ List.foldl1' TIntersect (Set.toList intersection)
     uni _ _ _ (TIntersect t1 t2) t =
-      if Set.member t (Set.fromList [t1, t2]) then
-        return t
+      -- TODO: Should use uni instead of Eq
+      if t `Set.member` Set.fromList [t1, t2] then return t
       else return $ tunion (TIntersect t1 t2) t
     uni trace bind1 bind2 t (TIntersect t1 t2) =
-      uni trace bind1 bind2 (TIntersect t1 t2) t
+      uni trace bind2 bind1 (TIntersect t1 t2) t
     uni _ _ _ TIntType TIntType = return TIntType
     uni _ _ _ TRealType TRealType = return TRealType
     uni _ _ _ TStringType TStringType = return TStringType
@@ -164,7 +170,7 @@ unify t1 t2 =
 unify' :: TType -> TType -> Infer (Maybe TType)
 unify' t1 t2 =
   let
-    uni' :: Set Identifier -> Bindings -> Bindings ->
+    uni' :: Trace -> Bindings -> Bindings ->
              TType -> TType -> Infer (Maybe TType)
     uni' trace bind1 bind2 (TTypeVar u) (TTypeVar u') = do
       t <- follow (TTypeVar u)
@@ -183,7 +189,7 @@ unify' t1 t2 =
     uni' trace bind1 bind2 (TForall _ t1) t2 =
       uni' trace bind1 bind2 t1 t2
     uni' trace bind1 bind2 t1 (TForall u t2) =
-      uni' trace bind1 bind2 (TForall u t2) t1
+      uni' trace bind2 bind1 (TForall u t2) t1
     uni' trace bind1 bind2 (TTypeVar u) t =
       follow (TTypeVar u) >>= \case
         TTypeVar u -> do
@@ -195,27 +201,33 @@ unify' t1 t2 =
                   return $ Just t''
                 Nothing -> return Nothing
     uni' trace bind1 bind2 t (TTypeVar u) =
-      uni' trace bind1 bind2 (TTypeVar u) t
+      uni' trace bind2 bind1 (TTypeVar u) t
     uni' trace bind1 bind2 t1@(TName s1 types1) t2@(TName s2 types2) = do
+      liftIO $ putStrLn $ "Looking up " ++ show s1 ++ " in " ++ show bind1
       t1' <- lookup bind1 s1
+      liftIO $ putStrLn $ "Found " ++ show t1'
+      liftIO $ putStrLn $ "Looking up " ++ show s2 ++ " in " ++ show bind2
       t2' <- lookup bind2 s2
-      bind1' <- makeBindings s1 types1
-      bind2' <- makeBindings s2 types2
+      liftIO $ putStrLn $ "Found " ++ show t2'
+      bind1' <- makeBindings s1 bind1 types1
+      bind2' <- makeBindings s2 bind2 types2
       case (Set.member s1 trace, Set.member s2 trace) of
         (True, True) -> return Nothing
         (True, False) -> uni' (Set.insert s2 trace) bind1 bind2' t1 t2'
         (False, True) -> uni' (Set.insert s1 trace) bind1' bind2 t1' t2
         (False, False) -> uni' (inserts trace [s1, s2]) bind1' bind2' t1' t2'
     uni' trace bind1 bind2 (TName s types) t2 = do
+      liftIO $ putStrLn $ "Looking up " ++ show s ++ " in " ++ show bind1
       t <- lookup bind1 s
-      bind <- makeBindings s types
+      liftIO $ putStrLn $ "Found " ++ show t
+      bind1' <- makeBindings s bind1 types
       if Set.member s trace then return Nothing
-      else uni' (Set.insert s trace) bind bind2 t t2
+      else uni' (Set.insert s trace) bind1' bind2 t t2
     uni' trace bind1 bind2 t1 (TName s types) =
-      uni' trace bind1 bind2 (TName s types) t1
+      uni' trace bind2 bind1 (TName s types) t1
     uni' trace bind1 bind2 (TArray t1) (TArray t2) =
       uni' trace bind1 bind2 t1 t2 >>= \case
-        Just t -> return $ Just $ TArray t
+        Just t -> return . Just $ TArray t
         Nothing -> return Nothing
     uni' trace bind1 bind2 (TTuple [t1]) (TTuple [t2]) =
       uni' trace bind1 bind2 t1 t2
@@ -295,7 +307,7 @@ unify' t1 t2 =
             Nothing -> return Nothing
         Nothing -> return Nothing
     uni' trace bind1 bind2 (TUnion t1 t2) ty =
-      uni' trace bind1 bind2 ty (TUnion t1 t2)
+      uni' trace bind2 bind1 ty (TUnion t1 t2)
     uni' trace bind1 bind2 (TIntersect t1 t2) (TIntersect t3 t4) =
       uni' trace bind1 bind2 t1 (TIntersect t3 t4) >>= \case
         Just ty1 ->
@@ -311,7 +323,7 @@ unify' t1 t2 =
             Nothing -> return $ Just ty1
         Nothing -> return Nothing
     uni' trace bind1 bind2 t (TIntersect t1 t2) =
-      uni' trace bind1 bind2 (TIntersect t1 t2) t
+      uni' trace bind2 bind1 (TIntersect t1 t2) t
     uni' _ _ _ TIntType TIntType = return $ Just TIntType
     uni' _ _ _ TRealType TRealType = return $ Just TRealType
     uni' _ _ _ TStringType TStringType = return $ Just TStringType

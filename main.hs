@@ -1,5 +1,6 @@
 import Parser as P
 import qualified TypeInfer as T
+import qualified PPTypedAst as PP
 --import qualified LLTranslate as LL
 --import qualified InferFieldOffsets as IFO
 --import qualified CallGraph as CG
@@ -11,10 +12,8 @@ main = let path = "test.z"
              case P.parse content of
                Left err -> print err
                Right ast -> do
-                 putStrLn (groom ast)
-                 putStrLn ""
                  (typed, env, _) <- T.infer ast
-                 putStrLn (groom typed)
+                 putStrLn $ PP.ppAst typed
                  --ll <- LL.translate env typed
                  --putStrLn (groom ll)
                  --let cg = CG.construct env funcs typed

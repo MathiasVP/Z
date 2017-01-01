@@ -68,16 +68,37 @@ mergeEnv env1 env2 = do
 mergeEnvWith :: Env -> Infer ()
 mergeEnvWith env = environment >>= flip mergeEnv env
 
+isTypeDecl :: Decl -> Bool
+isTypeDecl TypeDecl{} = True
+isTypeDecl _ = False
+
+isFunDecl :: Decl -> Bool
+isFunDecl FunDecl{} = True
+isFunDecl _ = False
 
 infer :: [Decl] -> IO ([TypedDecl], Env, Map Identifier FunctionInfo)
 infer decls = do
-  (typeddecls, st) <- runStateT (mapM inferDecl decls) emptySt
-  return (List.map (replaceDecl (subst st)) typeddecls,
-          Map.map (second (replaceType (subst st))) (env st),
-          allFuncs st)
+  let typedecls = List.filter isTypeDecl decls
+  let fundecls = List.filter isFunDecl decls
+
+  (typedecls', st) <- runStateT (mapM inferDecl typedecls) emptySt
+
+  let typedecls'' = List.map (replaceDecl (subst st) (env st)) typedecls'
+  let env'' = Map.mapWithKey (\ident (uniq, ty) ->
+                case List.find ((== ident) . stringOf . fst) typedecls'' of
+                  Just (ident', TTypeDecl ty') -> (idOf ident', ty')
+                  Nothing -> (uniq, ty)
+              ) $ Map.map (second (replaceType (subst st) (env st))) (env st)
+
+  (fundecls', st') <- runStateT (mapM inferDecl fundecls) (st {env = env''})
+  let fundecls'' = List.map (replaceDecl (subst st') (env st')) fundecls'
+  let env''' = Map.map (second (replaceType (subst st') (env st'))) (env st')
+
+  return (typedecls'' ++ fundecls'', env''', allFuncs st')
 
 insertArgOrd :: Identifier -> [Identifier] -> Infer ()
-insertArgOrd name targs = modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
+insertArgOrd name targs =
+  modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
 
 addFuncs :: Map Identifier FunctionInfo -> Infer ()
 addFuncs fs = do
@@ -93,7 +114,10 @@ transTy (Name name tys) =
   Map.lookup name <$> environment >>= \case
     Just (uniq, ty') -> do
       tys' <- mapM transTy tys
-      arglist <- fmap (Map.toList . (! Identifier (name, uniq))) argumentOrder
+      argord <- argumentOrder
+      arglist <- case Map.lookup (Identifier (name, uniq)) argord of
+                   Just a -> return $ Map.toList a
+                   Nothing -> return []
       let args = List.zip (List.map snd arglist) tys'
       return $ foldr (uncurry instansiate) ty' args
     Nothing -> error $ "Error: " ++ name ++ " not found in environment."
@@ -109,20 +133,17 @@ transTy' _ IntType = return TIntType
 transTy' _ BoolType = return TBoolType
 transTy' _ StringType = return TStringType
 transTy' _ RealType = return TRealType
-transTy' idents (Name name tys) =
+transTy' idents (Name name tys) = do
+  tys' <- mapM (transTy' idents) tys
   case Map.lookup name idents of
-    Just uniq -> do
-      tys' <- mapM (transTy' idents) tys
+    Just uniq ->
       return $ TName (Identifier (name, uniq)) tys'
     Nothing -> do
       env <- environment
       case Map.lookup name env of
-        Just (uniq, _) -> do
-          tys' <- mapM (transTy' idents) tys
+        Just (uniq, _) ->
           return $ TName (Identifier (name, uniq)) tys'
-        Nothing -> do
-          liftIO . putStrLn $ "Error: Undefined type name '" ++ name ++ "''"
-          return TError
+        Nothing -> return $ TRef name tys'
 transTy' idents (Array ty) = TArray <$> transTy' idents ty
 transTy' idents (Tuple tys) = TTuple <$> mapM (transTy' idents) tys
 transTy' idents (Record b fields) =
@@ -135,49 +156,49 @@ transTy' idents (Union ty1 ty2) =
 inferDecl :: Decl -> Infer TypedDecl
 inferDecl (TypeDecl name targs ty) = do
   targs' <- lift $ mapM fromString targs
+  ty' <- transTy' (Map.fromList $ List.map unIdentifier targs') ty
   name' <- lift $ fromString name
   modifyEnv (Map.insert name (idOf name', ty'))
-  ty' <- transTy' (Map.fromList (List.map unIdentifier targs')) ty
   insertArgOrd name' targs'
-  liftIO $ print $ TTypeDecl name' (List.foldr (TForall . idOf) ty' targs')
-  return (TTypeDecl name' (List.foldr (TForall . idOf) ty' targs'))
+  return (name', TTypeDecl (List.foldr TForall ty' targs'))
 
 inferDecl (FunDecl name tyArgs args retTy statement) = do
+  tyArgs' <- lift $ mapM fromString tyArgs
+  mapM_ (\ident -> do
+          t <- lift mkTypeVar
+          modifyEnv (Map.insert (stringOf ident) (idOf ident, t))) tyArgs'
   args' <- mapM (inferMatchExpr Nothing) args
-  retTy' <- case retTy of
-    Just ty -> transTy ty
-    Nothing -> lift mkTypeVar
-
+  retTy' <- maybe (lift mkTypeVar) transTy retTy
   let types = List.map snd args'
   funTy <- foldrM makeForall (makeArrow types retTy') types
   funId <- lift $ fromString name
   modifyEnv (Map.insert name (idOf funId, funTy))
   (statement', st) <- local $ inferStatement statement
-  modifySubst (const (subst st))
+  modifySubst (const $ subst st)
   addFuncs (allFuncs st)
   infRetTy <- mergeReturns statement'
-  tyArgs' <- lift $ mapM fromString tyArgs
+
   ifM (subtype retTy' infRetTy)
     (do funTy' <- foldrM makeForall (makeArrow types retTy') types
         modifyEnv (Map.insert name (idOf funId, funTy'))
-        addFunc funId tyArgs args' funTy' statement'
-        return $ TFunDecl funId tyArgs' args' retTy' statement')
+        addFunc funId tyArgs' args' funTy' statement'
+        return (funId, TFunDecl tyArgs' args' retTy' statement'))
     (do lift $ putStrLn $ "Error: Couldn't match expected return type '" ++
-                        show retTy' ++ "' with actual type '" ++
-                        show infRetTy ++ "'."
+                          show retTy' ++ "' with actual type '" ++
+                          show infRetTy ++ "'."
         modifyEnv (Map.insert name (idOf funId, TError))
-        addFunc funId tyArgs args' TError statement'
-        return $ TFunDecl funId tyArgs' args' retTy' statement')
+        addFunc funId tyArgs' args' TError statement'
+        return (funId, TFunDecl tyArgs' args' retTy' statement'))
 
-commMaybeInfer' :: Maybe (Infer (Maybe a)) -> Infer (Maybe (Maybe a))
-commMaybeInfer' (Just i) = fmap Just i
-commMaybeInfer' Nothing = return Nothing
+commMaybeInfer :: Maybe (Infer a) -> Infer (Maybe a)
+commMaybeInfer (Just i) = fmap Just i
+commMaybeInfer Nothing = return Nothing
 
 inferMatchExpr :: Maybe TType -> MatchExpr -> Infer TypedMatchExpr
 inferMatchExpr tm (TupleMatchExpr mes) = do
   mes' <- do
     types <- lift $ replicateM (List.length mes) mkTypeVar
-    commMaybeInfer' (fmap (unify' (TTuple types)) tm) >>= \case
+    commMaybeInfer (fmap (unify' (TTuple types)) tm) >>= \case
       Just (Just (TTuple ts)) ->
         mapM (\(me, t) -> inferMatchExpr (Just t) me) (List.zip mes ts)
       Nothing -> mapM (inferMatchExpr Nothing) mes
@@ -191,7 +212,7 @@ inferMatchExpr tm (TupleMatchExpr mes) = do
 inferMatchExpr tm (ListMatchExpr mes) = do
   t <- lift mkTypeVar
   mes' <-
-    commMaybeInfer' (fmap (unify' (TArray t)) tm) >>= \case
+    commMaybeInfer (fmap (unify' (TArray t)) tm) >>= \case
       Just (Just (TArray t)) -> mapM (inferMatchExpr (Just t)) mes
       Nothing -> mapM (inferMatchExpr Nothing) mes
       _ -> do
@@ -207,7 +228,7 @@ inferMatchExpr tm (RecordMatchExpr fields) = do
     fields' <- fmap (List.zip (normaliseFields fields))
                     (replicateM (List.length fields) (lift mkTypeVar))
     let record = TRecord False (List.map (\((s, _), ty) -> (s, ty)) fields')
-    commMaybeInfer' (fmap (unify' record) tm) >>= \case
+    commMaybeInfer (fmap (unify' record) tm) >>= \case
       Just (Just (TRecord _ fields')) ->
         mapM (\(entry, ty) -> f (Just ty) entry)
              (List.zip (normaliseFields fields) typesm)
@@ -225,16 +246,15 @@ inferMatchExpr tm (RecordMatchExpr fields) = do
                          show (RecordMatchExpr fields) ++ "' with type '" ++
                                    show record ++ "'.")
         return []
-  let recordTypes = List.map (\(name, (_, t)) -> (name, t)) fields'
-  recordTy <- makeRecord False recordTypes
+  recordTy <- makeRecord False (List.map (\(name, (_, t)) -> (name, t)) fields')
   return (TRecordMatchExpr fields', recordTy)
 
 inferMatchExpr tm (TypedMatchExpr me ty) = do
   me' <- inferMatchExpr tm me
   ty' <- transTy ty
-  unify' ty' (typeOf me') >>= \case
-    Just _ -> return me'
-    Nothing -> do
+  subtype ty' (typeOf me') >>= \case
+    True -> return me'
+    False -> do
       lift (putStrLn $ "Error: Couldn't match expected type '" ++ show ty ++
                        "' with actual type '" ++ show (typeOf me') ++ "'.")
       return me'
@@ -327,13 +347,13 @@ inferStatement (MatchStatement e mes) = do
 
         unifyStrict ty (me, s) = do
           me' <- inferMatchExpr Nothing me
-          subtype (typeOf me') ty >>= \case
+          subtype ty (typeOf me') >>= \case
             True -> do
               s' <- inferStatement s
               return (me', s')
             False -> do
-              lift (putStrLn $ "Cannot unify type '" ++ show ty ++
-                               "' with type '" ++ show (typeOf me') ++ "'.")
+              lift $ putStrLn $ "Cannot unify type '" ++ show ty ++
+                                "' with type '" ++ show (typeOf me') ++ "'."
               s' <- inferStatement s
               return (me', s')
 

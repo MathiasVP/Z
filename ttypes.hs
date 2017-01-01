@@ -5,23 +5,22 @@ import Hash
 import Data.Map()
 import Data.Foldable()
 import Data.Hashable
-import Unique
 
 data TType
   = TIntType
   | TBoolType
   | TStringType
   | TRealType
-
   | TName Identifier [TType]
   | TArray TType
   | TTuple [TType]
   | TRecord Bool [(String, TType)]
-  | TForall UniqueInt TType
+  | TForall Identifier TType
   | TArrow TType TType
   | TUnion TType TType
   | TIntersect TType TType
-  | TTypeVar UniqueInt
+  | TTypeVar Identifier
+  | TRef String [TType]
   | TError
     deriving (Eq, Ord, Show)
 
@@ -46,6 +45,8 @@ instance Hashable TType where
     hashWithSalt n (ty1, ty2) `combine` 19
   hashWithSalt n (TIntersect ty1 ty2) =
     hashWithSalt n (ty1, ty2) `combine` 23
+  hashWithSalt n (TRef name tys) =
+    hashWithSalt n (name, tys) `combine` 29
   hashWithSalt n (TTypeVar u) =
     hashWithSalt n u `combine` 29
   hashWithSalt n TError = n `combine` 31
