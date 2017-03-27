@@ -43,6 +43,11 @@ emptySt = InferSt { subst = Map.empty
 
 type Infer a = StateT InferSt IO a
 
+runInfer :: Infer a -> InferSt -> IO (a, InferSt)
+runInfer = runStateT
+
+evalInfer :: Infer a -> InferSt -> IO a
+evalInfer = evalStateT
 
 substitution :: Infer Substitution
 substitution = fmap subst get

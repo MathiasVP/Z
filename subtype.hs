@@ -1,7 +1,8 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, StandaloneDeriving #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 
 module Subtype(subtype) where
+
 import Prelude hiding (lookup)
 import Control.Monad
 import Control.Monad.State.Lazy
@@ -19,21 +20,36 @@ import TypedAst()
 (!) :: (Ord a, Show a, Show b) => Map a b -> a -> b
 (!) m k = fromMaybe (error $ show k ++ " ∉ " ++ show m) (Map.lookup k m)
 
+class Lattice a where
+  (\/) :: a -> a -> a
+  (/\) :: a -> a -> a
+  bot :: a
+  top :: a
+
 data Variance
   = Positive
   | Negative
   | Top
   | Bottom
 
-lub :: Variance -> Variance -> Variance
-lub Positive Positive = Positive
-lub Negative Negative = Negative
-lub v Bottom = v
-lub Bottom v = v
-lub _ _ = Top
+instance Lattice Variance where
+  (\/) Positive Positive = Positive
+  (\/) Negative Negative = Negative
+  (\/) v Bottom = v
+  (\/) Bottom v = v
+  (\/) _ _ = Top
 
-lubs :: [Variance] -> Variance
-lubs = List.foldr lub Bottom
+  (/\) Positive Positive = Positive
+  (/\) Negative Negative = Negative
+  (/\) v Top = v
+  (/\) Top v = v
+  (/\) _ _ = Bottom
+
+  bot = Bottom
+  top = Top
+
+lubs :: Lattice a => [a] -> a
+lubs = List.foldr (\/) bot
 
 invert :: Variance -> Variance
 invert Positive = Negative
@@ -57,17 +73,17 @@ variance t s =
                   ty' = instansiates ty (Map.fromList (List.zip names tys))
               in var (Set.insert s' trace) v ty'
             Nothing
-              | s == s'   -> return $ lub v Positive
+              | s == s'   -> return $ v \/ Positive
               | otherwise -> return v
       var trace v (TArrow t1 t2) = do
         v1 <- var trace v t1
         v2 <- var trace v t2
-        return $ lub (invert v1) v2
+        return $ invert v1 \/ v2
       var trace v (TForall _ ty) = var trace v ty
       var trace v (TUnion t1 t2) = do
         v1 <- var trace v t1
         v2 <- var trace v t2
-        return $ lub v1 v2
+        return $ v1 \/ v2
       var trace v (TTuple ts) = do
         vs <- mapM (var trace v) ts
         return $ lubs vs
@@ -78,7 +94,7 @@ variance t s =
       var trace v (TIntersect t1 t2) = do
         v1 <- var trace v t1
         v2 <- var trace v t2
-        return $ lub v1 v2
+        return $ v1 \/ v2
       var _ v _ = return v
   in var Set.empty Bottom t
 
@@ -89,7 +105,30 @@ lookup bind s = do
     Just (_, ty) -> return ty
     Nothing -> return $ bind ! s
 
-subtype :: TType -> TType -> Infer Bool
+data TypeCost
+  = Free
+  | Cost Integer
+  | Impossible
+  deriving (Eq, Show, Ord)
+
+instance Lattice TypeCost where
+  (\/) Free r = r
+  (\/) r Free = r
+  (\/) Impossible _ = Impossible
+  (\/) _ Impossible = Impossible
+  (\/) (Cost n) (Cost m) = Cost (n + m)
+
+  (/\) Free _ = Free
+  (/\) _ Free = Free
+  (/\) Impossible x = x
+  (/\) x Impossible = x
+  (/\) (Cost n) (Cost m) = Cost (n - m)
+
+  bot = Free
+  top = Impossible
+
+
+subtype :: TType -> TType -> Infer (Maybe TType)
 subtype t1 t2 =
   let
     updateOrElse f def k map =
@@ -98,136 +137,134 @@ subtype t1 t2 =
         Nothing -> Map.insert k def map
 
     sub :: Map Identifier Int -> Bindings -> Bindings ->
-             Map (Identifier, Identifier) ([TType], [TType]) ->
-               TType -> TType -> Infer Bool
-    sub trace bind1 bind2 assum (TForall u t1) t2 =
+               TType -> TType -> Infer (TypeCost, TType)
+    sub trace bind1 bind2 (TForall u t1) t2 =
       do TTypeVar u' <- lift mkTypeVar
-         sub trace bind1 bind2 assum (rename u' u t1) t2
-    sub trace bind1 bind2 assum t1 (TForall u t2) =
+         (c, t) <- sub trace bind1 bind2 (rename u' u t1) t2
+         free (TTypeVar u') >>= \case
+          True -> return (c, t)
+          False -> return (c, TForall u' t) {- TODO: This doesn't really make sense? -}
+    sub trace bind1 bind2 t1 (TForall u t2) =
       do TTypeVar u' <- lift mkTypeVar
-         sub trace bind1 bind2 assum t1 (rename u' u t2)
-    sub trace bind1 bind2 assum t1 t2@(TTypeVar _) =
+         (c, t) <- sub trace bind1 bind2 t1 (rename u' u t2)
+         free (TTypeVar u') >>= \case
+          True -> return (c, TForall u' t)
+          False -> return (c, t)
+    sub trace bind1 bind2 t1 t2@(TTypeVar _) =
       follow t2 >>= \case
         TTypeVar u -> do
           t1' <- follow t1
           modifySubst (Map.insert u t1')
-          return True
-        ty -> sub trace bind1 bind2 assum t1 ty
-    sub trace bind1 bind2 assum t1@(TTypeVar _) t2 =
+          return (Cost 1, TTypeVar u)
+        ty -> sub trace bind1 bind2 t1 ty
+    sub trace bind1 bind2 t1@(TTypeVar _) t2 =
       follow t1 >>= \case
         TTypeVar u -> do
           t2' <- follow t2
           modifySubst (Map.insert u t2')
-          return True
-        ty -> sub trace bind1 bind2 assum ty t2
-    sub trace bind1 bind2 assum (TName s1 tys1) (TName s2 tys2) =
-      case Map.lookup (s1, s2) assum of
-        Just (tys1', tys2') -> do
-          ty1 <- lookup bind1 s1
-          ty2 <- lookup bind2 s2
-          vars1 <- mapM (variance ty1) (Map.keys bind1)
-          vars2 <- mapM (variance ty2) (Map.keys bind2)
-          b1 <- foldM f True (List.zip3 tys1' tys2' vars1)
-          foldM f b1 (List.zip3 tys1' tys2' vars2)
-        Nothing
-          | s1 == s2 && Map.notMember s1 bind1 &&
-            Map.notMember s2 bind2 -> do
-              env <- environment
-              let (_, ty) = env ! stringOf s1
-              vars <- mapM (variance ty) (Map.keys bind1)
-              foldM f True (List.zip3 tys1 tys2 vars)
-          | otherwise -> do
-              t1 <- lookup bind1 s1
-              t2 <- lookup bind2 s2
-              let assum' = Map.insert (s1, s2) (tys1, tys2) assum
-              sub trace bind1 bind2 assum' t1 t2
-       where f True (t1, t2, Top) = do
-               b1 <- sub trace bind1 bind2 assum t1 t2
-               b2 <- sub trace bind1 bind2 assum t2 t1
-               return (b1 && b2)
-             f True (t1, t2, Positive) = sub trace bind1 bind2 assum t1 t2
-             f True (t1, t2, Negative) = sub trace bind1 bind2 assum t2 t1
-             f True (_, _, Bottom) = return True
-             f False _ = return False
-    sub trace bind1 bind2 assum (TName s tys) ty = do
+          return (Cost 1, TTypeVar u)
+        ty -> sub trace bind1 bind2 ty t2
+    sub trace bind1 bind2 (TName s1 tys1) (TName s2 tys2) =
+      if s1 == s2 && Map.notMember s1 bind1 && Map.notMember s2 bind2 then do
+          env <- environment
+          let (_, ty) = env ! stringOf s1
+          vars <- mapM (variance ty) (Map.keys bind1)
+          (c, tys) <- foldM f (Free, []) (List.zip3 tys1 tys2 vars)
+          return (c, TName s1 tys)
+      else do
+          t1 <- lookup bind1 s1
+          t2 <- lookup bind2 s2
+          sub trace bind1 bind2 t1 t2
+       where f (c, ts) (t1, t2, Positive) | c /= Impossible = do
+               (c', t) <- sub trace bind1 bind2 t1 t2
+               return (c \/ c', ts ++ [t])
+             f (c, ts) (t1, t2, Negative) | c /= Impossible = do
+               (c', t) <- sub trace bind1 bind2 t2 t1
+               return (c \/ c', ts ++ [t])
+             f (c, t) (_, _, Bottom) = return (c, t)
+             f (_, t) _ = return (Impossible, t)
+    sub trace bind1 bind2 (TName s tys) ty =
       case Map.lookup s trace of
-        Just n | n >= maxNumberOfUnrolls -> return False
+        Just n | n >= maxNumberOfUnrolls -> return (Impossible, TError)
         _ -> do
           t <- lookup bind1 s
           bind1' <- makeBindings s bind1 tys
-          sub (updateOrElse (+1) 0 s trace) bind1' bind2 assum t ty
-    sub trace bind1 bind2 assum ty (TName s tys) =
+          sub (updateOrElse (+1) 0 s trace) bind1' bind2 t ty
+    sub trace bind1 bind2 ty (TName s tys) =
       case Map.lookup s trace of
-        Just n | n >= maxNumberOfUnrolls -> return False
+        Just n | n >= maxNumberOfUnrolls -> return (Impossible, TError)
         _ -> do
           t <- lookup bind2 s
           bind2' <- makeBindings s bind2 tys
-          sub (updateOrElse (+1) 0 s trace) bind1 bind2' assum ty t
-    sub trace bind1 bind2 assum (TUnion t11 t12) (TUnion t21 t22) = do
-      subst <- substitution
-      b1121 <- sub trace bind1 bind2 assum t11 t21
-      subst1121 <- substitution
-      b1221 <- sub trace bind1 bind2 assum t12 t21
-      if b1121 && b1221 then return True
-      else do
-        modifySubst (const subst1121)
-        b1222 <- sub trace bind1 bind2 assum t12 t22
-        if b1121 && b1222 then return True
-        else do
-          modifySubst (const subst)
-          b1122 <- sub trace bind1 bind2 assum t11 t22
-          subst1122 <- substitution
-          b1221' <- sub trace bind1 bind2 assum t12 t21
-          if b1122 && b1221' then return True
-          else do
-            modifySubst (const subst1122)
-            b1222' <- sub trace bind1 bind2 assum t12 t22
-            if b1122 && b1222' then return True
-            else do
-              modifySubst (const subst)
-              return False
-    sub trace bind1 bind2 assum (TUnion t1 t2) ty = do
-      b1 <- sub trace bind1 bind2 assum t1 ty
-      --liftIO $ putStrLn $ show t1 ++ " <: " ++ show ty ++ ": " ++ show b1
-      b2 <- sub trace bind1 bind2 assum t2 ty
-      --liftIO $ putStrLn $ show t2 ++ " <: " ++ show ty ++ ": " ++ show b2
-      return $ b1 || b2
-    sub trace bind1 bind2 assum ty (TUnion t1 t2) = do
-      b1 <- sub trace bind1 bind2 assum ty t1
-      b2 <- sub trace bind1 bind2 assum ty t2
-      return $ b1 && b2
-    sub trace bind1 bind2 assum (TArrow tDom1 tCod1) (TArrow tDom2 tCod2) = do
-      b1 <- sub trace bind1 bind2 assum tDom1 tDom2
-      b2 <- sub trace bind1 bind2 assum tCod2 tCod1
-      return $ b1 && b2
-    sub trace bind1 bind2 assum (TTuple [t1]) t2 =
-      sub trace bind1 bind2 assum t1 t2
-    sub trace bind1 bind2 assum t1 (TTuple [t2]) =
-      sub trace bind1 bind2 assum t1 t2
-    sub trace bind1 bind2 assum (TTuple tys1) (TTuple tys2) =
-      if List.length tys1 == List.length tys2 then
-        allM (uncurry $ sub trace bind1 bind2 assum) (List.zip tys1 tys2)
-      else return False
-    sub trace bind1 bind2 assum (TArray t1) (TArray t2) =
-      sub trace bind1 bind2 assum t1 t2
-    sub trace bind1 bind2 assum (TRecord _ fields1) (TRecord mut2 fields2) =
-      foldM f True fields1
-      where f _ (name, ty) =
+          sub (updateOrElse (+1) 0 s trace) bind1 bind2' ty t
+    sub trace bind1 bind2 (TUnion t11 t12) (TUnion t21 t22) = do
+      let poss =
+            [(sub trace bind1 bind2 t11 t21, sub trace bind1 bind2 t12 t21),
+             (sub trace bind1 bind2 t11 t21, sub trace bind1 bind2 t12 t22),
+             (sub trace bind1 bind2 t11 t22, sub trace bind1 bind2 t12 t21),
+             (sub trace bind1 bind2 t11 t22, sub trace bind1 bind2 t12 t22)]
+      st <- get
+      Just (inl, inr) <- liftIO $ minimumOnM (\(inl, inr) -> do
+                ((c1, _), st') <- runInfer inl st
+                ((c2, _), _) <- runInfer inr st'
+                return $ c1 \/ c2) poss
+      (c1, inl') <- inl
+      (c2, inr') <- inr
+      return (c1 \/ c2, tunion inl' inr')
+    sub trace bind1 bind2 (TUnion t1 t2) ty = do
+      st <- get
+      (r1, st1) <- liftIO $ runInfer (sub trace bind1 bind2 t1 ty) st
+      (r2, st2) <- liftIO $ runInfer (sub trace bind1 bind2 t2 ty) st
+      if fst r1 < fst r2 then modify (const st1) >> return r1
+      else modify (const st2) >> return r2
+    sub trace bind1 bind2 ty (TUnion t1 t2) = do
+      (c1, t1') <- sub trace bind1 bind2 ty t1
+      (c2, t2') <- sub trace bind1 bind2 ty t2
+      return (c1 /\ c2, tunion t1' t2')
+    sub trace bind1 bind2 (TArrow tDom1 tCod1) (TArrow tDom2 tCod2) = do
+      (c1, tDom) <- sub trace bind1 bind2 tDom1 tDom2
+      (c2, tCod) <- sub trace bind1 bind2 tCod2 tCod1
+      return (c1 \/ c2, TArrow tDom tCod)
+    sub trace bind1 bind2 (TTuple [t1]) t2 =
+      sub trace bind1 bind2 t1 t2
+    sub trace bind1 bind2 t1 (TTuple [t2]) =
+      sub trace bind1 bind2 t1 t2
+    sub trace bind1 bind2 (TTuple tys1) (TTuple tys2) =
+      if List.length tys1 == List.length tys2 then do
+        (c, ts) <- foldM (\(c, ts) (t1, t2) -> do
+          (c', t) <- sub trace bind1 bind2 t1 t2
+          return (c \/ c', ts ++ [t])) (Free, []) (List.zip tys1 tys2)
+        return (c, TTuple ts)
+      else return (Impossible, TError)
+    sub trace bind1 bind2 (TArray t1) (TArray t2) =
+      sub trace bind1 bind2 t1 t2
+    sub trace bind1 bind2 (TRecord _ fields1) (TRecord mut2 fields2) = do
+      (c, fields) <- foldM f (Free, []) fields1
+      return (c, TRecord mut2 fields)
+      where f (c, fields) (name, ty) =
              case List.lookup name fields2 of
-              Just ty' -> sub trace bind1 bind2 assum ty ty'
-              Nothing -> return mut2
-    sub trace bind1 bind2 assum (TIntersect t1 t2) ty = do
-      b1 <- sub trace bind1 bind2 assum t1 ty
-      b2 <- sub trace bind1 bind2 assum t2 ty
-      return $ b1 && b2
-    sub trace bind1 bind2 assum ty (TIntersect t1 t2) = do
-      b1 <- sub trace bind1 bind2 assum ty t1
-      b2 <- sub trace bind1 bind2 assum ty t2
-      return $ b1 || b2
-    sub _ _ _ _ TIntType TIntType = return True
-    sub _ _ _ _ TIntType TRealType = return True
-    sub _ _ _ _ TRealType TRealType = return True
-    sub _ _ _ _ TBoolType TBoolType = return True
-    sub _ _ _ _ TStringType TStringType = return True
-    sub _ _ _ _ _ _ = return False
-  in sub Map.empty Map.empty Map.empty Map.empty t1 t2
+              Just ty' -> do
+                (c', ty'') <- sub trace bind1 bind2 ty ty'
+                return (c \/ c', fields ++ [(name, ty'')])
+              Nothing -> return $ if mut2 then (c, fields)
+                                  else (Impossible, fields ++ [(name, TError)])
+    sub trace bind1 bind2 (TIntersect t1 t2) ty = do
+      (c1, t1') <- sub trace bind1 bind2 ty t1
+      (c2, t2') <- sub trace bind1 bind2 ty t2
+      return (c1 /\ c2, tunion t1' t2')
+    sub trace bind1 bind2 ty (TIntersect t1 t2) = do
+      st <- get
+      (r1, st1) <- liftIO $ runInfer (sub trace bind1 bind2 ty t1) st
+      (r2, st2) <- liftIO $ runInfer (sub trace bind1 bind2 ty t2) st
+      if fst r1 < fst r2 then modify (const st1) >> return r1
+      else modify (const st2) >> return r2
+    sub _ _ _ TIntType TIntType = return (Free, TIntType)
+    sub _ _ _ TIntType TRealType = return (Free, TRealType)
+    sub _ _ _ TRealType TRealType = return (Free, TRealType)
+    sub _ _ _ TBoolType TBoolType = return (Free, TBoolType)
+    sub _ _ _ TStringType TStringType = return (Free, TStringType)
+    sub _ _ _ _ _ = return (Impossible, TError)
+  in sub Map.empty Map.empty Map.empty t1 t2 >>= \case
+       (Free, t) -> return $ Just t
+       (Cost _, t) -> return $ Just t
+       (Impossible, _) -> return Nothing

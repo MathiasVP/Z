@@ -23,6 +23,19 @@ import Subtype
 import TypeUtils
 import Replace
 
+formatType :: TType -> Infer String
+formatType ty = do
+  env <- environment
+  subst <- substitution
+  return . show $ replaceType subst env ty
+
+errorCannotMatchExpectedWithActual :: TType -> TType -> Infer String
+errorCannotMatchExpectedWithActual expected actual = do
+  expected' <- formatType expected
+  actual' <- formatType actual
+  return $ "Error: Cannot match expected type '" ++ expected' ++
+           "' with actual type '" ++ actual' ++ "'."
+
 extendRecord :: String -> TType -> TType -> Infer ()
 extendRecord name ty (TTypeVar u) =
   follow (TTypeVar u) >>= \case
@@ -120,7 +133,7 @@ transTy (Name name tys) =
                    Nothing -> return []
       let args = List.zip (List.map snd arglist) tys'
       return $ foldr (uncurry instansiate) ty' args
-    Nothing -> error $ "Error: " ++ name ++ " not found in environment."
+    Nothing -> error $ "Error: " ++ name ++ " is not defined."
 transTy (Array ty) = TArray <$> transTy ty
 transTy (Tuple tys) = TTuple <$> mapM transTy tys
 transTy (Record b fields) = TRecord b <$> mapM (\(name, ty) ->
@@ -178,17 +191,17 @@ inferDecl (FunDecl name tyArgs args retTy statement) = do
   addFuncs (allFuncs st)
   infRetTy <- mergeReturns statement'
 
-  ifM (subtype retTy' infRetTy)
-    (do funTy' <- foldrM makeForall (makeArrow types retTy') types
-        modifyEnv (Map.insert name (idOf funId, funTy'))
-        addFunc funId tyArgs' args' funTy' statement'
-        return (funId, TFunDecl tyArgs' args' retTy' statement'))
-    (do lift $ putStrLn $ "Error: Couldn't match expected return type '" ++
-                          show retTy' ++ "' with actual type '" ++
-                          show infRetTy ++ "'."
-        modifyEnv (Map.insert name (idOf funId, TError))
-        addFunc funId tyArgs' args' TError statement'
-        return (funId, TFunDecl tyArgs' args' retTy' statement'))
+  subtype retTy' infRetTy >>= \case
+    Just retTy -> do
+      funTy' <- foldrM makeForall (makeArrow types retTy) types
+      modifyEnv (Map.insert name (idOf funId, funTy'))
+      addFunc funId tyArgs' args' funTy' statement'
+      return (funId, TFunDecl tyArgs' args' retTy statement')
+    Nothing -> do
+      errorCannotMatchExpectedWithActual retTy' infRetTy >>= liftIO . putStrLn
+      modifyEnv (Map.insert name (idOf funId, TError))
+      addFunc funId tyArgs' args' TError statement'
+      return (funId, TFunDecl tyArgs' args' retTy' statement')
 
 commMaybeInfer :: Maybe (Infer a) -> Infer (Maybe a)
 commMaybeInfer (Just i) = fmap Just i
@@ -253,10 +266,9 @@ inferMatchExpr tm (TypedMatchExpr me ty) = do
   me' <- inferMatchExpr tm me
   ty' <- transTy ty
   subtype ty' (typeOf me') >>= \case
-    True -> return me'
-    False -> do
-      lift (putStrLn $ "Error: Couldn't match expected type '" ++ show ty ++
-                       "' with actual type '" ++ show (typeOf me') ++ "'.")
+    Just _ -> return me'
+    Nothing -> do
+      errorCannotMatchExpectedWithActual ty' (typeOf me') >>= liftIO . putStrLn
       return me'
 
 inferMatchExpr tm (VarMatch name) =
@@ -348,10 +360,10 @@ inferStatement (MatchStatement e mes) = do
         unifyStrict ty (me, s) = do
           me' <- inferMatchExpr Nothing me
           subtype ty (typeOf me') >>= \case
-            True -> do
+            Just _ -> do
               s' <- inferStatement s
               return (me', s')
-            False -> do
+            Nothing -> do
               lift $ putStrLn $ "Cannot unify type '" ++ show ty ++
                                 "' with type '" ++ show (typeOf me') ++ "'."
               s' <- inferStatement s
@@ -500,8 +512,8 @@ inferExpr (UnaryMinusExpr e) = do
     Just t ->
       return (TUnaryMinusExpr e', t)
     Nothing -> do
-      lift (putStrLn $ "Couldn't match expected type 'Int' or 'Real' " ++
-                       "with actual type '" ++ show (typeOf e') ++ "'.")
+      errorCannotMatchExpectedWithActual (TIntersect TIntType TRealType)
+        (typeOf e') >>= liftIO . putStrLn
       return (TUnaryMinusExpr e', TError)
 
 inferExpr (BangExpr e) = do
@@ -509,8 +521,8 @@ inferExpr (BangExpr e) = do
   unify' (typeOf e') TBoolType >>= \case
     Just _ -> return (TBangExpr e', TBoolType)
     Nothing -> do
-      lift (putStrLn $ "Couldn't match expected type 'Bool' with actual " ++
-                       "type '" ++ show (typeOf e') ++ "'.")
+      errorCannotMatchExpectedWithActual TBoolType
+        (typeOf e') >>= liftIO . putStrLn
       return (TBangExpr e', TBoolType)
 
 inferExpr (CallExpr f arg) = do
@@ -518,21 +530,19 @@ inferExpr (CallExpr f arg) = do
   arg' <- inferExpr arg
   tCod <- lift mkTypeVar
   subtype (typeOf f') (TArrow (typeOf arg') tCod) >>= \case
-    True -> return (TCallExpr f' arg', tCod)
-    False -> do
-      lift (putStrLn $ "Couldn't match expected type '" ++ show (typeOf f') ++
-                       "' with actual type '" ++ show (TArrow (typeOf arg') tCod) ++
-                       "'.")
+    Just _ -> return (TCallExpr f' arg', tCod)
+    Nothing -> do
+      errorCannotMatchExpectedWithActual (typeOf f')
+        (TArrow (typeOf arg') tCod) >>= liftIO . putStrLn
       return (TCallExpr f' arg', TError)
 
 inferExpr (TypeConstrainedExpr e ty) = do
   e' <- inferExpr e
   ty' <- transTy ty
   subtype (typeOf e') ty' >>= \case
-    True -> return e'
-    False -> do
-      lift (putStrLn $ "Couldn't match expected type '" ++ show ty ++
-                       "' with actual type '" ++ show (typeOf e') ++ "'.")
+    Just _ -> return e'
+    Nothing -> do
+      errorCannotMatchExpectedWithActual ty' (typeOf e') >>= liftIO . putStrLn
       return e'
 
 inferExpr (ListExpr es) = do
@@ -621,8 +631,8 @@ inferLValueExpr tm (FieldAccessExpr lve field) = do
     Nothing -> do -- Reading from variable
       u <- lift mkTypeVar
       subtype (typeOf lve') (TRecord True [(field, u)]) >>= \case
-        True -> return (TFieldAccessExpr lve' field, u)
-        False -> do
+        Just _ -> return (TFieldAccessExpr lve' field, u)
+        Nothing -> do
           lift $ putStrLn $ "'" ++ field ++ "' is not a field of type '"
                             ++ show (typeOf lve') ++ "'"
           return (TFieldAccessExpr lve' field, TError)
@@ -636,11 +646,10 @@ inferLValueExpr _ (ArrayAccessExpr lve e) = do
       unify' (typeOf e') TIntType >>= \case
         Just _ -> return (TArrayAccessExpr lve' e', arrayTy)
         Nothing -> do
-          lift $ putStrLn $ "Couldn't match expected type '" ++
-                            show IntType ++ "' with actual type '" ++
-                            show (typeOf e') ++ "'."
+          errorCannotMatchExpectedWithActual TIntType
+            (typeOf e') >>= liftIO . putStrLn
           return (TArrayAccessExpr lve' e', TError)
     Nothing -> do
-      lift $ putStrLn $ "Couldn't match expected array type " ++
-                        "with actual type '" ++ show (typeOf lve') ++ "'."
+      errorCannotMatchExpectedWithActual (TArray arrayTy)
+        (typeOf lve') >>= liftIO . putStrLn
       return (TArrayAccessExpr lve' e', TError)

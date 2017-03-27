@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 module TTypes(Identifier(..), stringOf, idOf, identifier,
              fromString, placeholder, TType(..), tunion, tintersect) where
 import qualified Data.List as List
@@ -5,6 +6,8 @@ import Hash
 import Data.Map()
 import Data.Foldable()
 import Data.Hashable
+
+import qualified Debug.Hoed.Pure as Hoed
 
 data TType
   = TIntType
@@ -22,7 +25,9 @@ data TType
   | TTypeVar Identifier
   | TRef String [TType]
   | TError
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Show, Hoed.Generic)
+
+instance Hoed.Observable TType
 
 instance Hashable TType where
   hashWithSalt n TIntType = n `combine` 3

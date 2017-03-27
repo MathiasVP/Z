@@ -33,9 +33,10 @@ ppTypedMatchExpr (TListMatchExpr tmexprs, _) =
 ppTypedMatchExpr (TRecordMatchExpr fields, _) =
   braces $ commaSep (List.map (\(name, tmexpr) ->
     text name <+> equals <+> ppTypedMatchExpr tmexpr) fields)
-ppTypedMatchExpr (TVarMatch ident, ty) = ppIdent ident <+> colon <+> ppTType ty
+ppTypedMatchExpr (TVarMatch ident, ty) =
+  text "(" <> ppIdent ident <+> colon <+> ppTType ty <> text ")"
 ppTypedMatchExpr (TIntMatchExpr n, _) = text $ show n
-ppTypedMatchExpr (TStringMatchExpr s, _) = text s
+ppTypedMatchExpr (TStringMatchExpr s, _) = text "\"" <> text s <> text "\""
 ppTypedMatchExpr (TBoolMatchExpr b, _) = text $ show b
 
 ppTypedStatement :: TypedStatement -> Doc
@@ -74,7 +75,7 @@ ppTypedDecl (ident, decl@TFunDecl{}) =
 
 ppTypedLValueExpr :: TypedLValueExpr -> Doc
 ppTypedLValueExpr (TVarExpr ident, ty) =
-  ppIdent ident <+> colon <+> ppTType ty
+  text "(" <> ppIdent ident <+> colon <+> ppTType ty <> text ")"
 ppTypedLValueExpr (TFieldAccessExpr tlve name, ty) =
   ppTypedLValueExpr tlve <+> char '.' <+> text name <+> colon <+> ppTType ty
 ppTypedLValueExpr (TArrayAccessExpr tlve texpr, ty) =
@@ -89,7 +90,7 @@ ppTypedExpr :: TypedExpr -> Doc
 ppTypedExpr (TIntExpr n, _) = text $ show n
 ppTypedExpr (TRealExpr d, _) = text $ show d
 ppTypedExpr (TBoolExpr b, _) = text $ show b
-ppTypedExpr (TStringExpr s, _) = text s
+ppTypedExpr (TStringExpr s, _) = text "\"" <> text s <> text "\""
 ppTypedExpr (TOrExpr texpr1 texpr2, _) =
   parens $ between texpr1 (text "or") texpr2
 ppTypedExpr (TAndExpr texpr1 texpr2, _) =
@@ -150,7 +151,7 @@ ppTType (TForall ident ty) =
 ppTType (TArrow ty1 ty2) = ppTType ty1 <+> text "->" <+> ppTType ty2
 ppTType (TUnion ty1 ty2) = ppTType ty1 <+> char '|' <+> ppTType ty2
 ppTType (TIntersect ty1 ty2) = ppTType ty1 <+> char '&' <+> ppTType ty2
-ppTType (TTypeVar ident) = ppIdent ident
+ppTType (TTypeVar (Identifier (s, u))) = text $ s ++ show u
 ppTType (TRef name []) = text name
 ppTType (TRef name tys) =
   text name <> char '<' <> commaSep (List.map ppTType tys) <> char '>'

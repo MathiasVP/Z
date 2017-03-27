@@ -1,9 +1,9 @@
+{-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
+
 module Parser where
 import Text.Parsec hiding (State)
 import Text.Parsec.Indent
-import Control.Applicative hiding (many, (<|>))
 import Control.Monad.State
-import Data.Char
 import Data.Maybe
 import Types
 import Ast
@@ -13,6 +13,7 @@ type IParser a = ParsecT String () (State SourcePos) a
 parse :: SourceName -> Either ParseError [Decl]
 parse input = runIndent "" $ runParserT (many1 (decl <* spaces) <* eof) () "" input
 
+spaces' :: IParser String
 spaces' = many (char ' ')
 
 -- Declarations
@@ -74,6 +75,7 @@ funDeclWithName name = do
     spaces
     return (name, fromMaybe [] typevarsM, args, typeM, makeCompound s)
 
+decl :: IParser Decl
 decl = funDecl
    <|> typeDecl
 
@@ -87,6 +89,7 @@ unionType = do
     spaces
     return union
 
+keywords :: [String]
 keywords = ["type", "fun", "fn", "if", "else",
             "while", "for", "in", "match",
             "return", "break", "continue",
@@ -181,9 +184,11 @@ statement = try ifStatement
         <|> try declStatement
         <|> assignStatement
 
+makeCompound :: [Statement] -> Statement
 makeCompound [s] = s
 makeCompound s = CompoundStatement s
 
+ifStatement :: IParser Statement
 ifStatement = withPos $ do
     e <- ifHeader
     indented
@@ -194,7 +199,7 @@ ifStatement = withPos $ do
     return $ makeIf e s s'
   where
     makeIf e sThen sElseM =
-      IfStatement e (makeCompound sThen) (liftM makeCompound sElseM)
+      IfStatement e (makeCompound sThen) (fmap makeCompound sElseM)
 
     ifHeader = do
         string "if"
@@ -219,8 +224,8 @@ ifStatement = withPos $ do
         -- If there is an else statement that's indented further than the current indentation
         --   then report an error.
         -- Otherwise we do nothing.
-        x <- lookAhead ((checkIndent >> (elseHeader True))
-                    <|> (indented >> (elseHeader False))
+        x <- lookAhead ((checkIndent >> elseHeader True)
+                    <|> (indented >> elseHeader False)
                     <|> return Nothing)
         case x of
           Just True ->
@@ -230,6 +235,7 @@ ifStatement = withPos $ do
           Just False -> fail ""
           Nothing -> return Nothing
 
+whileStatement :: IParser Statement
 whileStatement = withPos $ do
     e <- whileHeader
     indented
@@ -245,6 +251,7 @@ whileStatement = withPos $ do
             spaces
             return e
 
+forStatement :: IParser Statement
 forStatement = withPos $ do
     (me, e) <- forHeader
     indented
@@ -264,6 +271,7 @@ forStatement = withPos $ do
             spaces
             return (me, e)
 
+assignStatement :: IParser Statement
 assignStatement = try assignMatchExpr
               <|> assignLValueExpr
   where assignMatchExpr = do
@@ -285,6 +293,7 @@ assignStatement = try assignMatchExpr
             spaces
             return $ AssignStatement (Right lve) e
 
+matchStatement :: IParser Statement
 matchStatement = withPos $ do
     string "match"
     spaces'
@@ -306,6 +315,7 @@ matchStatement = withPos $ do
             spaces
             return (me, makeCompound s)
 
+returnStatement :: IParser Statement
 returnStatement = do
     string "return"
     spaces'
@@ -313,21 +323,25 @@ returnStatement = do
     spaces
     return $ ReturnStatement e
 
+breakStatement :: IParser Statement
 breakStatement = do
     string "break"
     spaces
     return BreakStatement
 
+continueStatement :: IParser Statement
 continueStatement = do
     string "continue"
     spaces
     return ContinueStatement
 
+declStatement :: IParser Statement
 declStatement = do
     d <- decl
     return $ DeclStatement d
 
 -- Expressions
+expr :: IParser Expr
 expr = orExpr
 
 orExpr :: IParser Expr
@@ -336,12 +350,14 @@ orExpr = chainl1 andExpr (op "or" OrExpr)
 andExpr :: IParser Expr
 andExpr = chainl1 eqExpr (op "and" AndExpr)
 
+eq :: IParser (Expr -> Expr -> Expr)
 eq = op "==" EqExpr
  <|> op "!=" NeqExpr
 
 eqExpr :: IParser Expr
 eqExpr = chainl1 relExpr eq
 
+rel :: IParser (Expr -> Expr -> Expr)
 rel = try (op "<=" LeExpr)
   <|> try (op ">=" GeExpr)
   <|> op "<" LtExpr
@@ -415,28 +431,29 @@ primaryExpr = do
                <|> tupleExpr
                <|> recordExpr
                <|> try lambdaExpr
-               <|> try ((return LValue) <*> lvalueExpr)
+               <|> try (return LValue <*> lvalueExpr)
 
-maybeType = optionMaybe $ try $ do
-                char ':'
-                spaces'
-                t <- type_
-                spaces'
-                return t
+maybeType  :: IParser (Maybe Type)
+maybeType =
+  optionMaybe $ try $ do
+    char ':'
+    spaces'
+    t <- type_
+    spaces'
+    return t
 
 literalExpr :: IParser Expr
-literalExpr = try ((return RealExpr) <*> real)
-          <|> (return IntExpr) <*> integer
-          <|> (return BoolExpr) <*> bool
-          <|> (return StringExpr) <*> string_
+literalExpr = try (return RealExpr <*> real)
+          <|> return IntExpr <*> integer
+          <|> return BoolExpr <*> bool
+          <|> return StringExpr <*> string_
 
 integer :: IParser Int
 integer = do
-    n <- rd <$> (minus <|> number)
+    n <- read <$> (minus <|> number)
     spaces'
     return n
-  where rd     = read :: String -> Int
-        minus  = (:) <$> char '-' <*> number
+  where minus  = (:) <$> char '-' <*> number
         number = many1 digit
 
 real :: IParser Double
@@ -444,8 +461,7 @@ real = do
     n <- fmap read $ (++) <$> number <*> decimal
     spaces'
     return n
-  where rd = read :: String -> Float
-        decimal = (:) <$> char '.' <*> number
+  where decimal = (:) <$> char '.' <*> number
         number = many1 digit
 
 bool :: IParser Bool

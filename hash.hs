@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Hash(Identifier(..), stringOf, idOf, identifier, unIdentifier,
              fromString, placeholder, combine) where
 import Data.Map()
@@ -5,9 +6,12 @@ import Data.Foldable()
 import Data.Hashable
 import Unique
 import Data.Bits
+import qualified Debug.Hoed.Pure as Hoed
 
 newtype Identifier = Identifier (String, UniqueInt)
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Hoed.Generic)
+
+instance Hoed.Observable Identifier
 
 unIdentifier :: Identifier -> (String, UniqueInt)
 unIdentifier (Identifier (s, u)) = (s, u)

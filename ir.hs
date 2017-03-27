@@ -5,9 +5,11 @@ import Control.Monad
 import qualified Data.List as List
 import Control.Monad.Trans.State.Lazy
 
+
+
 newtype UniqString = UniqString String
   deriving (Ord, Eq)
-  
+
 instance Show UniqString where
   show (UniqString s) = s
 
