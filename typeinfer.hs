@@ -402,19 +402,24 @@ inferBinopExpr mkeExpr mkType e1 e2 = do
 mkMathOpType :: TypedExpr -> TypedExpr -> Infer TType
 mkMathOpType e1 e2 = do
   expType <- makeIntersect TIntType TRealType
-  unify' (typeOf e1) expType >>= \case
+  subtype (typeOf e1) expType >>= \case
     Just t1 ->
-      unify' (typeOf e2) expType >>= \case
+      subtype (typeOf e2) expType >>= \case
         Just t2 ->
           unify' t1 t2 >>= \case
             Just t -> return t
             Nothing -> do
+              liftIO $ print t1
+              liftIO $ print t2
+              liftIO $ print "1"
               errorCannotUnifyTypeWithType t1 t2 >>= liftIO . putStrLn
               return TError
         Nothing -> do
+          liftIO $ print "2"
           errorCannotUnifyTypeWithType (typeOf e2) expType >>= liftIO . putStrLn
           return TError
     Nothing -> do
+      liftIO $ print "3"
       errorCannotUnifyTypeWithType (typeOf e1) expType >>= liftIO . putStrLn
       return TError
 

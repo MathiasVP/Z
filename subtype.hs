@@ -259,7 +259,7 @@ subtype t1 t2 =
       if fst r1 < fst r2 then modify (const st1) >> return r1
       else modify (const st2) >> return r2
     sub _ _ _ TIntType TIntType = return (Free, TIntType)
-    sub _ _ _ TIntType TRealType = return (Free, TRealType)
+    sub _ _ _ TIntType TRealType = return (Cost 0, TRealType)
     sub _ _ _ TRealType TRealType = return (Free, TRealType)
     sub _ _ _ TBoolType TBoolType = return (Free, TBoolType)
     sub _ _ _ TStringType TStringType = return (Free, TStringType)

@@ -325,6 +325,8 @@ unify' t1 t2 =
     uni' trace bind1 bind2 t (TIntersect t1 t2) =
       uni' trace bind2 bind1 (TIntersect t1 t2) t
     uni' _ _ _ TIntType TIntType = return $ Just TIntType
+    uni' _ _ _ TIntType TRealType = return $ Just TRealType
+    uni' _ _ _ TRealType TIntType = return $ Just TRealType
     uni' _ _ _ TRealType TRealType = return $ Just TRealType
     uni' _ _ _ TStringType TStringType = return $ Just TStringType
     uni' _ _ _ TBoolType TBoolType = return $ Just TBoolType
