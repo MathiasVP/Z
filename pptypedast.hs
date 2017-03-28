@@ -11,6 +11,9 @@ ppAst decls = render $ vcat (List.map ppTypedDecl decls)
 ppIdent :: Identifier -> Doc
 ppIdent = text . stringOf
 
+ppIdentWithId :: Identifier -> Doc
+ppIdentWithId ident = text (stringOf ident ++ show (idOf ident))
+
 commaSep :: [Doc] -> Doc
 commaSep xs = hsep (punctuate (char ',') xs)
 
@@ -21,7 +24,7 @@ ppTypedDeclData (TFunDecl [] tmes retTy body) =
   parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
   text "->" <+> ppTType retTy <+> equals $$ ppTypedStatement body
 ppTypedDeclData (TFunDecl tyargs tmes retTy body) =
-  char '<' <> commaSep (List.map ppIdent tyargs) <> char '>' <+>
+  char '<' <> commaSep (List.map ppIdentWithId tyargs) <> char '>' <+>
   parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
   text "->" <+> ppTType retTy <+> equals $$ ppTypedStatement body
 
@@ -147,7 +150,7 @@ ppTType (TRecord _ fields) =
   braces $ commaSep $ List.map (\(name, ty) ->
     text name <+> colon <+> ppTType ty) fields
 ppTType (TForall ident ty) =
-  parens $ text "∀" <+> ppIdent ident <> char '.' <+> ppTType ty
+  parens $ text "∀" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType (TArrow ty1 ty2) = ppTType ty1 <+> text "->" <+> ppTType ty2
 ppTType (TUnion ty1 ty2) = ppTType ty1 <+> char '|' <+> ppTType ty2
 ppTType (TIntersect ty1 ty2) = ppTType ty1 <+> char '&' <+> ppTType ty2

@@ -64,13 +64,23 @@ replaceType subst env ty =
 replaceDecl :: Substitution -> Env -> TypedDecl -> TypedDecl
 replaceDecl subst env (ident, td) = (ident, replaceDeclData subst env td)
 
+replaceIdent :: Substitution -> Env -> Identifier -> Identifier
+replaceIdent subst env ident =
+  case Map.lookup (stringOf ident) env of
+    Just (_, TTypeVar ident') ->
+      case Map.lookup ident' subst of
+        Just (TTypeVar ident'') -> ident''
+        _ -> ident'
+    _ -> ident
+
 replaceDeclData :: Substitution -> Env -> TypedDeclData -> TypedDeclData
 replaceDeclData subst env td =
   case td of
     TTypeDecl t ->
       TTypeDecl (replaceType subst env t)
     TFunDecl typeargs args retTy s ->
-      TFunDecl typeargs (List.map (replaceMatchExpr subst env) args)
+      TFunDecl (List.map (replaceIdent subst env) typeargs)
+        (List.map (replaceMatchExpr subst env) args)
                                   (replaceType subst env retTy)
                                   (replaceStatement subst env s)
 
