@@ -13,7 +13,6 @@ import Data.Hashable
 import Data.Bool
 import Hash
 import Unique
-import Utils
 
 import Types
 import TTypes
@@ -35,6 +34,20 @@ errorCannotMatchExpectedWithActual expected actual = do
   actual' <- formatType actual
   return $ "Error: Cannot match expected type '" ++ expected' ++
            "' with actual type '" ++ actual' ++ "'."
+
+errorCannotUnifyMatchExprWithType :: MatchExpr -> TType -> Infer String
+errorCannotUnifyMatchExprWithType expr ty = do
+  ty' <- formatType ty
+  return $ "Error: Cannot unify expression '" ++
+           show expr ++ "' with type '" ++
+           show ty' ++ "'."
+
+errorCannotUnifyTypeWithType :: TType -> TType -> Infer String
+errorCannotUnifyTypeWithType ty1 ty2 = do
+  [ty1', ty2'] <- mapM formatType [ty1, ty2]
+  return $ "Error: Cannot unify type '" ++
+           show ty1' ++ "' with type '" ++
+           show ty2' ++ "'."
 
 extendRecord :: String -> TType -> TType -> Infer ()
 extendRecord name ty (TTypeVar u) =
@@ -216,9 +229,8 @@ inferMatchExpr tm (TupleMatchExpr mes) = do
         mapM (\(me, t) -> inferMatchExpr (Just t) me) (List.zip mes ts)
       Nothing -> mapM (inferMatchExpr Nothing) mes
       _ -> do
-        lift (putStrLn $ "Match error: Couldn't unify expression '" ++
-                         show (TupleMatchExpr mes) ++ "' with type '" ++
-                         show (TTuple types) ++ "'.")
+        errorCannotUnifyMatchExprWithType (TupleMatchExpr mes)
+          (TTuple types) >>= liftIO . putStrLn
         return []
   return (TTupleMatchExpr mes', TTuple (List.map typeOf mes'))
 
@@ -229,9 +241,8 @@ inferMatchExpr tm (ListMatchExpr mes) = do
       Just (Just (TArray t)) -> mapM (inferMatchExpr (Just t)) mes
       Nothing -> mapM (inferMatchExpr Nothing) mes
       _ -> do
-        lift (putStrLn $ "Match error: Couldn't unify expression '" ++
-                         show (ListMatchExpr mes) ++ "' with type '" ++
-                         show (TArray t) ++ "'.")
+        errorCannotUnifyMatchExprWithType (ListMatchExpr mes)
+          (TArray t) >>= liftIO . putStrLn
         return []
   ty <- unifyTypes (List.map typeOf mes')
   return (TListMatchExpr mes', TArray ty)
@@ -255,9 +266,8 @@ inferMatchExpr tm (RecordMatchExpr fields) = do
                 lift (fromString name) >>= \field -> modifyEnv (Map.insert name (idOf field, typeOf me'))
                 return (name, me')
       _ -> do
-        lift (putStrLn $ "Match error: Couldn't unify expression '" ++
-                         show (RecordMatchExpr fields) ++ "' with type '" ++
-                                   show record ++ "'.")
+        errorCannotUnifyMatchExprWithType (RecordMatchExpr fields)
+          record >>= liftIO . putStrLn
         return []
   recordTy <- makeRecord False (List.map (\(name, (_, t)) -> (name, t)) fields')
   return (TRecordMatchExpr fields', recordTy)
@@ -364,8 +374,7 @@ inferStatement (MatchStatement e mes) = do
               s' <- inferStatement s
               return (me', s')
             Nothing -> do
-              lift $ putStrLn $ "Cannot unify type '" ++ show ty ++
-                                "' with type '" ++ show (typeOf me') ++ "'."
+              errorCannotUnifyTypeWithType ty (typeOf me') >>= liftIO . putStrLn
               s' <- inferStatement s
               return (me', s')
 
@@ -399,16 +408,13 @@ mkMathOpType e1 e2 = do
           unify' t1 t2 >>= \case
             Just t -> return t
             Nothing -> do
-              lift (putStrLn $ "Cannot unify type '" ++ show t1 ++
-                               "' with type '" ++ show t2 ++ "'.")
+              errorCannotUnifyTypeWithType t1 t2 >>= liftIO . putStrLn
               return TError
         Nothing -> do
-          lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e2) ++
-                           "' with type '" ++ show expType ++ "'.")
+          errorCannotUnifyTypeWithType (typeOf e2) expType >>= liftIO . putStrLn
           return TError
     Nothing -> do
-      lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
-                       "' with type '" ++ show expType ++ "'.")
+      errorCannotUnifyTypeWithType (typeOf e1) expType >>= liftIO . putStrLn
       return TError
 
 mkLogicalOpType :: TypedExpr -> TypedExpr -> Infer TType
@@ -420,16 +426,16 @@ mkLogicalOpType e1 e2 =
           unify' t1 t2 >>= \case
             Just _ -> return TBoolType
             Nothing -> do
-              lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
-                               "' with type '" ++ show (typeOf e2) ++ "'.")
+              errorCannotUnifyTypeWithType (typeOf e1) (typeOf e2) >>=
+                liftIO . putStrLn
               return TError
         Nothing -> do
-          lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e2) ++
-                           "' with type '" ++ show BoolType ++ "'.")
+          errorCannotUnifyTypeWithType (typeOf e2) TBoolType >>=
+            liftIO . putStrLn
           return TError
     Nothing -> do
-      lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
-                       "' with type '" ++ show BoolType ++ "'.")
+      errorCannotUnifyTypeWithType (typeOf e1) TBoolType >>=
+        liftIO . putStrLn
       return TError
 
 mkEqOpType :: TypedExpr -> TypedExpr -> Infer TType
@@ -437,8 +443,8 @@ mkEqOpType e1 e2 =
   unify' (typeOf e1) (typeOf e2) >>= \case
     Just _ -> return TBoolType
     Nothing -> do
-      lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e1) ++
-                       "' with type '" ++ show (typeOf e2) ++ "'.")
+      errorCannotUnifyTypeWithType (typeOf e1) (typeOf e2) >>=
+        liftIO . putStrLn
       return TError
 
 mkRelOpType :: TypedExpr -> TypedExpr -> Infer TType
@@ -449,12 +455,12 @@ mkRelOpType e1 e2 = do
       unify' (typeOf e2) expectedType >>= \case
         Just _ -> return TBoolType
         Nothing -> do
-          lift (putStrLn $ "Cannot unify type '" ++ show (typeOf e2) ++
-                           "' with type '" ++ show expectedType ++ "'.")
+          errorCannotUnifyTypeWithType (typeOf e2) expectedType >>=
+            liftIO . putStrLn
           return TError
     Nothing -> do
-      lift (putStrLn $ "Can not unify type '" ++ show (typeOf e1) ++
-                       "' with type '" ++ show expectedType ++ "'.")
+      errorCannotUnifyTypeWithType (typeOf e1) expectedType >>=
+        liftIO . putStrLn
       return TError
 
 inferExpr :: Expr -> Infer TypedExpr
