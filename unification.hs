@@ -83,12 +83,8 @@ unify t1 t2 =
           return t''
     uni trace bind1 bind2 t (TTypeVar u) = uni trace bind2 bind1 (TTypeVar u) t
     uni trace bind1 bind2 t1@(TName s1 types1) t2@(TName s2 types2) = do
-      liftIO $ putStrLn $ "Looking up " ++ show s1 ++ " in " ++ show bind1
       t1' <- lookup bind1 s1
-      liftIO $ putStrLn $ "Found " ++ show t1'
-      liftIO $ putStrLn $ "Looking up " ++ show s2 ++ " in " ++ show bind2
       t2' <- lookup bind2 s2
-      liftIO $ putStrLn $ "Found " ++ show t2'
       bind1' <- makeBindings s1 bind1 types1
       bind2' <- makeBindings s2 bind2 types2
       case (Set.member s1 trace, Set.member s2 trace) of

@@ -37,7 +37,7 @@ ppTypedMatchExpr (TRecordMatchExpr fields, _) =
   braces $ commaSep (List.map (\(name, tmexpr) ->
     text name <+> equals <+> ppTypedMatchExpr tmexpr) fields)
 ppTypedMatchExpr (TVarMatch ident, ty) =
-  text "(" <> ppIdent ident <+> colon <+> ppTType ty <> text ")"
+  text "(" <> ppIdentWithId ident <+> colon <+> ppTType ty <> text ")"
 ppTypedMatchExpr (TIntMatchExpr n, _) = text $ show n
 ppTypedMatchExpr (TStringMatchExpr s, _) = text "\"" <> text s <> text "\""
 ppTypedMatchExpr (TBoolMatchExpr b, _) = text $ show b
@@ -72,13 +72,13 @@ ppTypedStatement (TDeclStatement tdecl) = ppTypedDecl tdecl
 
 ppTypedDecl :: TypedDecl -> Doc
 ppTypedDecl (ident, decl@TTypeDecl{}) =
-  text "type" <+> ppIdent ident <+> char '=' <+> ppTypedDeclData decl
+  text "type" <+> ppIdentWithId ident <+> char '=' <+> ppTypedDeclData decl
 ppTypedDecl (ident, decl@TFunDecl{}) =
-  text "fun" <+> ppIdent ident <+> ppTypedDeclData decl
+  text "fun" <+> ppIdentWithId ident <+> ppTypedDeclData decl
 
 ppTypedLValueExpr :: TypedLValueExpr -> Doc
 ppTypedLValueExpr (TVarExpr ident, ty) =
-  text "(" <> ppIdent ident <+> colon <+> ppTType ty <> text ")"
+  text "(" <> ppIdentWithId ident <+> colon <+> ppTType ty <> text ")"
 ppTypedLValueExpr (TFieldAccessExpr tlve name, ty) =
   ppTypedLValueExpr tlve <+> char '.' <+> text name <+> colon <+> ppTType ty
 ppTypedLValueExpr (TArrayAccessExpr tlve texpr, ty) =
@@ -141,9 +141,9 @@ ppTType TIntType = text "Int"
 ppTType TBoolType = text "Bool"
 ppTType TStringType = text "String"
 ppTType TRealType = text "Real"
-ppTType (TName ident []) = ppIdent ident
+ppTType (TName ident []) = ppIdentWithId ident
 ppTType (TName ident tys) =
-  ppIdent ident <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
+  ppIdentWithId ident <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
 ppTType (TArray ty) = brackets $ ppTType ty
 ppTType (TTuple tys) = parens $ commaSep $ List.map ppTType tys
 ppTType (TRecord _ fields) =
