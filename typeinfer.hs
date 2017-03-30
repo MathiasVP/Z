@@ -193,7 +193,6 @@ inferDecl (FunDecl name tyArgs args retTy statement) = do
   mapM_ (\ident -> do
           t <- lift mkTypeVar
           modifyEnv (Map.insert (stringOf ident) (idOf ident, t))) tyArgs'
-  env <- environment
   args' <- mapM (inferMatchExpr Nothing) args
   retTy' <- maybe (lift mkTypeVar) transTy retTy
   let types = List.map snd args'

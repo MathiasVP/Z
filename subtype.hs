@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, StandaloneDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 
 module Subtype(subtype) where

@@ -494,12 +494,9 @@ listExpr = do
 
 tupleExpr :: IParser Expr
 tupleExpr = do
-    char '('
-    spaces'
+    char '(' >> spaces'
     exprs <- sepBy expr (spaces' >> char ',' >> spaces')
-    spaces'
-    char ')'
-    spaces'
+    spaces' >> char ')' >> spaces'
     return $ TupleExpr exprs
 
 recordExpr :: IParser Expr

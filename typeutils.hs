@@ -147,7 +147,9 @@ instansiate name ty t =
         | s == name = ty
         | otherwise = TName s []
       inst (TName s tys) = TName s (List.map inst tys)
-      inst (TForall u ty) = TForall u (inst ty)
+      inst (TForall u ty)
+        | u == name = inst ty
+        | otherwise = TForall u (inst ty)
       inst (TArrow tDom tCod) = TArrow (inst tDom) (inst tCod)
       inst (TUnion t1 t2) = tunion (inst t1) (inst t2)
       inst (TTuple tys) = TTuple (List.map inst tys)
