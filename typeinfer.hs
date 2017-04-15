@@ -139,7 +139,7 @@ transTy RealType = return TRealType
 transTy (Name name tys) =
   Map.lookup name <$> environment >>= \case
     Just (uniq, ty') -> do
-      tys' <- mapM transTy tys
+      tys' <- mapM (transTy >=> (`reduce` Map.empty)) tys
       argord <- argumentOrder
       arglist <- case Map.lookup (Identifier (name, uniq)) argord of
                    Just a -> return $ Map.toList a
@@ -194,6 +194,7 @@ inferDecl (FunDecl name tyArgs args retTy statement) = do
           t <- lift mkTypeVar
           modifyEnv (Map.insert (stringOf ident) (idOf ident, t))) tyArgs'
   args' <- mapM (inferMatchExpr Nothing) args
+
   retTy' <- maybe (lift mkTypeVar) transTy retTy
   let types = List.map snd args'
   funTy <- foldrM makeForall (makeArrow types retTy') types
@@ -408,17 +409,12 @@ mkMathOpType e1 e2 = do
           unify' t1 t2 >>= \case
             Just t -> return t
             Nothing -> do
-              liftIO $ print t1
-              liftIO $ print t2
-              liftIO $ print "1"
               errorCannotUnifyTypeWithType t1 t2 >>= liftIO . putStrLn
               return TError
         Nothing -> do
-          liftIO $ print "2"
           errorCannotUnifyTypeWithType (typeOf e2) expType >>= liftIO . putStrLn
           return TError
     Nothing -> do
-      liftIO $ print "3"
       errorCannotUnifyTypeWithType (typeOf e1) expType >>= liftIO . putStrLn
       return TError
 

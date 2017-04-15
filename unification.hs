@@ -12,6 +12,7 @@ import Data.Maybe
 import qualified Data.List as List
 import Data.Set (Set)
 import Data.Map (Map)
+
 --import Data.Map ((!))
 import TTypes
 import Ast()
@@ -40,13 +41,6 @@ unifyTypes types = do
 
 inserts :: Ord a => Set a -> [a] -> Set a
 inserts = List.foldr Set.insert
-
-lookup :: Bindings -> Identifier -> Infer TType
-lookup bind s = do
-  env <- environment
-  case Map.lookup (stringOf s) env of
-    Just (_, ty) -> return ty
-    Nothing -> return $ bind ! s
 
 unify :: TType -> TType ->  Infer TType
 unify t1 t2 =
@@ -97,9 +91,7 @@ unify t1 t2 =
         (False, False) ->
           uni (inserts trace [s1, s2]) bind1' bind2' t1' t2'
     uni trace bind1 bind2 t1@(TName s types) t2 = do
-      liftIO $ putStrLn $ "Looking up " ++ show s ++ " in " ++ show bind1
       t <- lookup bind1 s
-      liftIO $ putStrLn $ "Found " ++ show t
       bind1' <- makeBindings s bind1 types
       if Set.member s trace then
         return $ tunion (instansiates t1 bind1') (instansiates t2 bind2)
@@ -134,8 +126,6 @@ unify t1 t2 =
       tyDom <- uni trace bind1 bind2 tyDom1 tyDom2
       tyCod <- uni trace bind1 bind2 tyCod1 tyCod2
       return $ TArrow tyDom tyCod
-    -- TODO: Not sure if this is correct. Should go through all possibilities
-    --       like in uni'.
     uni trace bind1 bind2 (TUnion t1 t2) (TUnion t3 t4) = do
       t13 <- uni trace bind1 bind2 t1 t3
       t24 <- uni trace bind1 bind2 t2 t4
@@ -199,12 +189,8 @@ unify' t1 t2 =
     uni' trace bind1 bind2 t (TTypeVar u) =
       uni' trace bind2 bind1 (TTypeVar u) t
     uni' trace bind1 bind2 t1@(TName s1 types1) t2@(TName s2 types2) = do
-      liftIO $ putStrLn $ "Looking up " ++ show s1 ++ " in " ++ show bind1
       t1' <- lookup bind1 s1
-      liftIO $ putStrLn $ "Found " ++ show t1'
-      liftIO $ putStrLn $ "Looking up " ++ show s2 ++ " in " ++ show bind2
       t2' <- lookup bind2 s2
-      liftIO $ putStrLn $ "Found " ++ show t2'
       bind1' <- makeBindings s1 bind1 types1
       bind2' <- makeBindings s2 bind2 types2
       case (Set.member s1 trace, Set.member s2 trace) of
@@ -213,9 +199,7 @@ unify' t1 t2 =
         (False, True) -> uni' (Set.insert s1 trace) bind1' bind2 t1' t2
         (False, False) -> uni' (inserts trace [s1, s2]) bind1' bind2' t1' t2'
     uni' trace bind1 bind2 (TName s types) t2 = do
-      liftIO $ putStrLn $ "Looking up " ++ show s ++ " in " ++ show bind1
       t <- lookup bind1 s
-      liftIO $ putStrLn $ "Found " ++ show t
       bind1' <- makeBindings s bind1 types
       if Set.member s trace then return Nothing
       else uni' (Set.insert s trace) bind1' bind2 t t2

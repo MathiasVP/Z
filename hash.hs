@@ -1,5 +1,4 @@
-module Hash(Identifier(..), stringOf, idOf, identifier, unIdentifier,
-             fromString, placeholder, combine) where
+module Hash where
 import Data.Map()
 import Data.Foldable()
 import Data.Hashable

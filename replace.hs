@@ -9,6 +9,7 @@ import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Set(Set)
+import Hash
 import Data.Map()
 
 replaceType :: Substitution -> Env -> TType -> TType

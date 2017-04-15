@@ -8,15 +8,6 @@ import Data.List as List
 ppAst :: [TypedDecl] -> String
 ppAst decls = render $ vcat (List.map ppTypedDecl decls)
 
-ppIdent :: Identifier -> Doc
-ppIdent = text . stringOf
-
-ppIdentWithId :: Identifier -> Doc
-ppIdentWithId ident = text (stringOf ident ++ show (idOf ident))
-
-commaSep :: [Doc] -> Doc
-commaSep xs = hsep (punctuate (char ',') xs)
-
 ppTypedDeclData :: TypedDeclData -> Doc
 ppTypedDeclData (TTypeDecl ty) =
   ppTType ty
@@ -135,27 +126,3 @@ ppTypedExpr (TLValue tlve, _) = ppTypedLValueExpr tlve
 ppTypedExpr (TLambdaExpr targs body, _) =
   parens $ text "fn" <+> hsep (List.map ppTypedMatchExpr targs) <+>
     text "=>" $$ nest 2 (ppTypedStatement body)
-
-ppTType :: TType -> Doc
-ppTType TIntType = text "Int"
-ppTType TBoolType = text "Bool"
-ppTType TStringType = text "String"
-ppTType TRealType = text "Real"
-ppTType (TName ident []) = ppIdentWithId ident
-ppTType (TName ident tys) =
-  ppIdentWithId ident <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
-ppTType (TArray ty) = brackets $ ppTType ty
-ppTType (TTuple tys) = parens $ commaSep $ List.map ppTType tys
-ppTType (TRecord _ fields) =
-  braces $ commaSep $ List.map (\(name, ty) ->
-    text name <+> colon <+> ppTType ty) fields
-ppTType (TForall ident ty) =
-  parens $ text "∀" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
-ppTType (TArrow ty1 ty2) = ppTType ty1 <+> text "->" <+> ppTType ty2
-ppTType (TUnion ty1 ty2) = ppTType ty1 <+> char '|' <+> ppTType ty2
-ppTType (TIntersect ty1 ty2) = ppTType ty1 <+> char '&' <+> ppTType ty2
-ppTType (TTypeVar (Identifier (s, u))) = text $ s ++ show u
-ppTType (TRef name []) = text name
-ppTType (TRef name tys) =
-  text name <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
-ppTType TError = text "Error"

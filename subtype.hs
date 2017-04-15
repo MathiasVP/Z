@@ -14,6 +14,7 @@ import qualified Data.Set as Set
 import qualified Data.List as List
 import Data.Maybe
 import TTypes
+import Hash
 import TypeUtils
 import TypedAst()
 
@@ -98,13 +99,6 @@ variance t s =
       var _ v _ = return v
   in var Set.empty Bottom t
 
-lookup :: Bindings -> Identifier -> Infer TType
-lookup bind s = do
-  env <- environment
-  case Map.lookup (stringOf s) env of
-    Just (_, ty) -> return ty
-    Nothing -> return $ bind ! s
-
 data TypeCost
   = Free
   | Cost Integer
@@ -185,17 +179,21 @@ subtype t1 t2 =
              f (_, t) _ = return (Impossible, t)
     sub trace bind1 bind2 (TName s tys) ty =
       case Map.lookup s trace of
-        Just n | n >= maxNumberOfUnrolls -> return (Impossible, TError)
+        Just n | n >= maxNumberOfUnrolls ->
+          (liftIO . putStrLn) "Maximum depth reached" >>
+            return (Impossible, TError)
         _ -> do
           t <- lookup bind1 s
-          bind1' <- makeBindings s bind1 tys
+          tys' <- mapM (`reduce` bind1) tys
+          bind1' <- makeBindings s bind1 tys'
           sub (updateOrElse (+1) 0 s trace) bind1' bind2 t ty
     sub trace bind1 bind2 ty (TName s tys) =
       case Map.lookup s trace of
         Just n | n >= maxNumberOfUnrolls -> return (Impossible, TError)
         _ -> do
           t <- lookup bind2 s
-          bind2' <- makeBindings s bind2 tys
+          tys' <- mapM (`reduce` bind2) tys
+          bind2' <- makeBindings s bind2 tys'
           sub (updateOrElse (+1) 0 s trace) bind1 bind2' ty t
     sub trace bind1 bind2 (TUnion t11 t12) (TUnion t21 t22) = do
       let poss =

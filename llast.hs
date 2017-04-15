@@ -1,10 +1,13 @@
 module LLAst where
-import Types
+import Text.PrettyPrint
+import TTypes
+import Hash
+import qualified Data.List as List
 
 type TIdentifier = Identifier
 
-data LLDecl = LLTypeDecl TIdentifier [TIdentifier] Type
-            | LLFunDecl Identifier [TIdentifier] Type LLStatement
+data LLDecl = LLTypeDecl TIdentifier TType
+            | LLFunDecl Identifier [TIdentifier] TType LLStatement
   deriving (Show)
 
 data BinOp
@@ -26,7 +29,7 @@ data Pred
   = IsTuple Int
   | IsList Int
   | IsRecord
-  | HasField String
+  | HasField String -- Precondition: IsRecord
   | IsInt Int
   | IsString String
   | IsBool Bool
@@ -36,16 +39,17 @@ data LLStatement
   = LLLitExpr Identifier Lit
   | LLBinOp BinOp Identifier Identifier Identifier
   | LLUnaryOp UnaryOp Identifier Identifier
-  | LLCallExpr Identifier Identifier [Identifier]
+  | LLCallExpr (Maybe Identifier) Identifier [Identifier]
+  | LLInternalExpr (Maybe Identifier) String [Identifier]
   | LLListExpr Identifier [Identifier]
   | LLTupleExpr Identifier [Identifier]
   | LLRecordExpr Identifier [(String, Identifier)]
-  | LLGetIdx Identifier Identifier Identifier
-  | LLSetIdx Identifier Identifier Identifier
-  | LLGetField Identifier Identifier String
-  | LLSetField Identifier String Identifier
-  | LLSetProj Identifier Int Identifier
-  | LLGetProj Identifier Identifier Int
+  | LLGetIdx Identifier Identifier Identifier -- List get
+  | LLSetIdx Identifier Identifier Identifier -- List set
+  | LLGetField Identifier Identifier String -- Record get
+  | LLSetField Identifier String Identifier -- Record set
+  | LLGetProj Identifier Identifier Int -- Tuple get
+--  | LLSetProj Identifier Int Identifier -- Tuple set
   | LLAssign Identifier Identifier
   | LLLambdaExpr Identifier [Identifier] LLStatement
   | LLIf Identifier LLStatement LLStatement

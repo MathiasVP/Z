@@ -7,11 +7,13 @@ import Control.Monad.Loops
 import Data.Ord
 import Data.Foldable
 import Control.Monad.State.Lazy
+import Prelude hiding (lookup)
 import qualified Data.Map as Map
-import Data.Map (Map)
+import Data.Map (Map, (!))
 import qualified Data.Set as Set
 import Data.Set(Set)
 import qualified Data.List as List
+import Hash
 import TypedAst
 import TTypes
 import Unique
@@ -127,6 +129,13 @@ free ty =
     TTypeVar _ -> return True
     _          -> return False
 
+lookup :: Bindings -> Identifier -> Infer TType
+lookup bind s = do
+  env <- environment
+  case Map.lookup (stringOf s) env of
+    Just (_, ty) -> return ty
+    Nothing -> return $ bind ! s
+
 -- TODO: FIXME
 makeBindings :: Identifier -> Bindings -> [TType] -> Infer Bindings
 makeBindings s binds types = do
@@ -162,6 +171,29 @@ instansiate name ty t =
 
 instansiates :: TType -> Bindings -> TType
 instansiates = Map.foldrWithKey instansiate
+
+reduce :: TType -> Bindings -> Infer TType
+reduce (TName name tys) bind = do
+  ty_name <- lookup bind name
+  fmap (Map.lookup name) argumentOrder >>= \case
+    Just argord ->
+      let args = List.zip (List.map snd $ Map.toList argord) tys
+      in return $ List.foldr (uncurry instansiate) ty_name args
+    Nothing -> error $ "Type name '" ++ show name ++ "' not found"
+reduce TIntType _ = return TIntType
+reduce TBoolType _ = return TBoolType
+reduce TStringType _ = return TStringType
+reduce TRealType _ = return TRealType
+reduce (TArray ty) bind = fmap TArray (reduce ty bind)
+reduce (TTuple tys) bind = fmap TTuple (mapM (`reduce` bind) tys)
+reduce (TRecord _ _) _ = error "TODO"
+reduce (TForall ident ty) bind = fmap (TForall ident) (reduce ty bind)
+reduce (TArrow tyDom tyCod) bind = do
+  tyDom' <- reduce tyDom bind
+  tyCod' <- reduce tyCod bind
+  return $ TArrow tyDom' tyCod'
+reduce (TTypeVar ident) _ = return $ TTypeVar ident
+reduce _ _ = error "TODO"
 
 mkTypeVar :: IO TType
 mkTypeVar = TTypeVar <$> fromString "t"
