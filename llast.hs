@@ -27,7 +27,8 @@ data Lit
 
 data Pred
   = IsTuple Int
-  | IsList Int
+  | IsList
+  | HasLength Int -- Precondition: IsList
   | IsRecord
   | HasField String -- Precondition: IsRecord
   | IsInt Int
@@ -49,12 +50,12 @@ data LLStatement
   | LLGetField Identifier Identifier String -- Record get
   | LLSetField Identifier String Identifier -- Record set
   | LLGetProj Identifier Identifier Int -- Tuple get
---  | LLSetProj Identifier Int Identifier -- Tuple set
   | LLAssign Identifier Identifier
   | LLLambdaExpr Identifier [Identifier] LLStatement
   | LLIf Identifier LLStatement LLStatement
   | LLPred Pred Identifier LLStatement LLStatement
   | LLWhile LLStatement Identifier LLStatement
+  | LLFor LLStatement Identifier Identifier LLStatement
   | LLSeq LLStatement LLStatement
   | LLReturn Identifier
   | LLBreak

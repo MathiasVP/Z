@@ -492,12 +492,16 @@ listExpr = do
     spaces'
     return $ ListExpr exprs
 
+mkTuple :: [Expr] -> Expr
+mkTuple [expr] = expr
+mkTuple exprs = TupleExpr exprs
+
 tupleExpr :: IParser Expr
 tupleExpr = do
     char '(' >> spaces'
     exprs <- sepBy expr (spaces' >> char ',' >> spaces')
     spaces' >> char ')' >> spaces'
-    return $ TupleExpr exprs
+    return $ mkTuple exprs
 
 recordExpr :: IParser Expr
 recordExpr = do

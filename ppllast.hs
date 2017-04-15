@@ -48,7 +48,8 @@ ppUnaryOp Bang = text "*"
 
 ppPred :: Pred -> Doc
 ppPred(IsTuple n) = text "IsTuple" <+> text (show n)
-ppPred(IsList n) = text "IsList" <+> text (show n)
+ppPred IsList = text "IsList"
+ppPred (HasLength n) = text "HasLength" <+> text (show n)
 ppPred IsRecord = text "IsRecord"
 ppPred (HasField s) = text "HasField" <+> text (show s)
 ppPred(IsInt n) = text "IsInt" <+> text (show n)
@@ -59,9 +60,10 @@ ppLLStmt :: LLStatement -> Doc
 ppLLStmt (LLLitExpr ident lit) =
   ppIdentWithId ident <+> text "=" <+> ppLit lit
 ppLLStmt (LLBinOp op res lhs rhs) =
-    ppIdentWithId res <+> text "=" <+> ppIdentWithId lhs <+> ppBinOp op <+> ppIdent rhs
+    ppIdentWithId res <+> text "=" <+>
+    ppIdentWithId lhs <+> ppBinOp op <+> ppIdentWithId rhs
 ppLLStmt (LLUnaryOp op res ident) =
-  ppIdentWithId res <+> text "=" <+> ppUnaryOp op <+> ppIdent ident
+  ppIdentWithId res <+> text "=" <+> ppUnaryOp op <+> ppIdentWithId ident
 ppLLStmt (LLCallExpr Nothing func args) =
   ppIdentWithId func <+> parens (commaSep (List.map ppIdentWithId args))
 ppLLStmt (LLCallExpr (Just res) func args) =
@@ -112,6 +114,11 @@ ppLLStmt (LLPred predicate ident thenStmt elseStmt) =
 ppLLStmt (LLWhile gen_ident ident body) =
   text "while" $$
     nest 2 (ppLLStmt gen_ident $$ ppIdentWithId ident) $$
+    nest 2 (ppLLStmt body)
+ppLLStmt (LLFor gen_i i list_ident body) =
+  text "for" $$
+    nest 2 (ppLLStmt gen_i) $$
+    nest 2 (ppIdentWithId i <+> text "in" <+> ppIdentWithId list_ident) $$
     nest 2 (ppLLStmt body)
 ppLLStmt (LLSeq stmt1 stmt2) = ppLLStmt stmt1 $$ ppLLStmt stmt2
 ppLLStmt (LLReturn ident) = text "return" <+> ppIdentWithId ident

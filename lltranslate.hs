@@ -52,83 +52,85 @@ module LLTranslate where
   seq :: [LLStatement] -> LLStatement
   seq = List.foldl1' LLSeq
 
+  transMatchExpr :: TypedMatchExpr -> Access -> LL LLStatement LLIdentifier
+  transMatchExpr (TTupleMatchExpr mes, _) acc = do
+    t_tuple <- read acc
+    mapM_ (\(idx, me) ->
+           transMatchExpr me Access {
+                   read = do
+                     t <- liftIO $ fromString "t_tuple_read"
+                     tell $ LLPred (IsTuple $ List.length mes) t_tuple
+                              (LLGetProj t t_tuple idx)
+                              (LLInternalExpr Nothing "bind_error_callback" [])
+                     return t,
+                    write = error "BUG: Cannot modify tuple" })
+          (List.zip [0..] mes)
+    return t_tuple
+  transMatchExpr (TListMatchExpr mes, _) acc = do
+    t_list <- read acc
+    mapM_ (\(idx, me) ->
+     transMatchExpr me Access {
+             read = do
+               t <- liftIO $ fromString "t_list_read"
+               t_idx <- liftIO $ fromString "t_idx"
+               tell $ LLPred IsList t_list
+                        (LLPred (HasLength $ List.length mes) t_list
+                          (LLLitExpr t_idx (IntLit idx) `mappend`
+                           LLGetIdx t t_list t_idx)
+                          (LLInternalExpr Nothing "bind_error_callback" []))
+                        (LLInternalExpr Nothing "bind_error_callback" [])
+               return t,
+              write = \ident -> do
+                t_idx <- liftIO $ fromString "t_idx"
+                tell $ LLLitExpr t_idx (IntLit idx)
+                tell $ LLSetIdx t_list t_idx ident })
+      (List.zip [0..] mes)
+    return t_list
+  transMatchExpr (TRecordMatchExpr fields, _) acc = do
+    t_rec <- read acc
+    mapM_ (\(idx, (s, me)) ->
+      transMatchExpr me Access {
+              read = do
+                       t <- liftIO $ fromString "t_rec_read"
+                       tell $
+                         LLPred IsRecord t_rec
+                           (LLPred (HasField s) t_rec
+                             (LLGetField t t_rec s)
+                             (LLInternalExpr Nothing "bind_error_callback" []))
+                           (LLInternalExpr Nothing "bind_error_callback" [])
+                       return t,
+                      write = tell . LLSetField t_rec s })
+      (List.zip [0..] fields)
+    return t_rec
+  transMatchExpr (TVarMatch s, _) acc = do
+    modify (first $ Map.insert s acc)
+    return s
+  transMatchExpr (TIntMatchExpr n, _) acc = do
+    t_num <- read acc
+    tell $ LLPred (IsInt n) t_num LLNop
+             (LLInternalExpr Nothing "bind_error_callback" [])
+    return t_num
+  transMatchExpr (TStringMatchExpr s, _) acc = do
+    t_str <- read acc
+    tell $ LLPred (IsString s) t_str LLNop
+             (LLInternalExpr Nothing "bind_error_callback" [])
+    return t_str
+  transMatchExpr (TBoolMatchExpr b, _) acc = do
+    t_bool <- read acc
+    tell $ LLPred (IsBool b) t_bool LLNop
+             (LLInternalExpr Nothing "bind_error_callback" [])
+    return t_bool
+
   transDecl :: TypedDecl -> LL [LLDecl] ()
   transDecl (name, TTypeDecl ty) = tell [LLTypeDecl name ty]
   transDecl (name, TFunDecl tyargs args returnTy stmt) = do
     (args', init_args) <- runLL $ mapM (\(n, me) -> do
       t <- liftIO $ fromString ("arg_" ++ show n)
-      stmt <- execLL $ go me Access { read = return t, write = tell . LLAssign t }
+      stmt <- execLL $ transMatchExpr me Access { read = return t, write = tell . LLAssign t }
       tell stmt
       return t) (List.zip [0..] args)
     stmt' <- execLL (transStmt stmt)
     tell [LLFunDecl name args' returnTy (init_args `mappend` stmt')]
-    where
-      go :: TypedMatchExpr -> Access -> LL LLStatement LLIdentifier
-      go (TTupleMatchExpr mes, _) acc = do
-        t_tuple <- read acc
-        mapM_ (\(idx, me) ->
-               go me Access {
-                       read = do
-                         t <- liftIO $ fromString "t_tuple_read"
-                         tell $ LLPred (IsTuple $ List.length mes) t_tuple
-                                  (LLGetProj t t_tuple idx)
-                                  (LLInternalExpr Nothing "bind_error_callback" [])
-                         return t,
-                        write = error "Cannot modify tuple" })
-              (List.zip [0..] mes)
-        return t_tuple
-      go (TListMatchExpr mes, _) acc = do
-        t_list <- read acc
-        mapM_ (\(idx, me) ->
-         go me Access {
-                 read = do
-                   t <- liftIO $ fromString "t_list_read"
-                   t_idx <- liftIO $ fromString "t_idx"
-                   tell $ LLPred (IsList $ List.length mes) t_list
-                            (LLLitExpr t_idx (IntLit idx) `mappend`
-                             LLGetIdx t t_list t_idx)
-                            (LLInternalExpr Nothing "bind_error_callback" [])
-                   return t,
-                  write = \ident -> do
-                    t_idx <- liftIO $ fromString "t_idx"
-                    tell $ LLLitExpr t_idx (IntLit idx)
-                    tell $ LLSetIdx t_list t_idx ident })
-          (List.zip [0..] mes)
-        return t_list
-      go (TRecordMatchExpr fields, _) acc = do
-        t_rec <- read acc
-        mapM_ (\(idx, (s, me)) ->
-          go me Access {
-                  read = do
-                           t <- liftIO $ fromString "t_rec_read"
-                           tell $
-                             LLPred IsRecord t_rec
-                               (LLPred (HasField s) t_rec
-                                 (LLGetField t t_rec s)
-                                 (LLInternalExpr Nothing "bind_error_callback" []))
-                               (LLInternalExpr Nothing "bind_error_callback" [])
-                           return t,
-                          write = tell . LLSetField t_rec s })
-          (List.zip [0..] fields)
-        return t_rec
-      go (TVarMatch s, _) acc = do
-        modify (first $ Map.insert s acc)
-        return s
-      go (TIntMatchExpr n, _) acc = do
-        t_num <- read acc
-        tell $ LLPred (IsInt n) t_num LLNop
-                 (LLInternalExpr Nothing "bind_error_callback" [])
-        return t_num
-      go (TStringMatchExpr s, _) acc = do
-        t_str <- read acc
-        tell $ LLPred (IsString s) t_str LLNop
-                 (LLInternalExpr Nothing "bind_error_callback" [])
-        return t_str
-      go (TBoolMatchExpr b, _) acc = do
-        t_bool <- read acc
-        tell $ LLPred (IsBool b) t_bool LLNop
-                 (LLInternalExpr Nothing "bind_error_callback" [])
-        return t_bool
 
   transLval :: TypedLValueExpr -> LL LLStatement LLIdentifier
   transLval (TVarExpr ident, _) =
@@ -257,7 +259,16 @@ module LLTranslate where
     return ident
   transExpr (TLValue lve, _) = transLval lve
 
-  transExpr (TLambdaExpr mes stmt, _) = undefined
+  transExpr (TLambdaExpr mes stmt, ty) = do
+    (args', init_args) <- runLL $ mapM (\(n, me) -> do
+      t <- liftIO $ fromString ("arg_" ++ show n)
+      stmt <- execLL $ transMatchExpr me Access { read = return t, write = tell . LLAssign t }
+      tell stmt
+      return t) (List.zip [0..] mes)
+    stmt' <- execLL (transStmt stmt)
+    func <- liftIO $ fromString "fun"
+    tell $ LLDeclare (LLFunDecl func args' ty (init_args `mappend` stmt'))
+    return func
 
   transStmt :: TypedStatement -> LL LLStatement ()
   transStmt (TIfStatement e stmt1 (Just stmt2)) = do
@@ -273,7 +284,15 @@ module LLTranslate where
     (ident, ident_stmt) <- runLL $ transExpr e
     stmt' <- execLL $ transStmt stmt
     tell (LLWhile ident_stmt ident stmt')
-  transStmt (TForStatement me e stmt) = undefined
+  transStmt (TForStatement me e stmt) = do
+    (list_ident, list_init_stmt) <- runLL $ transExpr e
+    t <- liftIO $ fromString "t_loop_var"
+    t_stmt <- execLL $ transMatchExpr me
+                             Access{ read = return t,
+                                     write = tell . LLAssign t}
+    stmt' <- execLL $ transStmt stmt
+    tell list_init_stmt
+    tell $ LLFor t_stmt t list_ident stmt'
   transStmt (TCompoundStatement stmts) = mapM_ transStmt stmts
   transStmt (TAssignStatement (Left me) e) = do
     res <- transExpr e
@@ -300,8 +319,10 @@ module LLTranslate where
                   tell $ LLGetIdx ident res idx_ident
                   go me ident
                 ) (List.zip [0..] mes)
-        tell $ LLPred (IsList $ List.length mes) res
-               stmt
+        tell $ LLPred IsList res
+               (LLPred (HasLength $ List.length mes) res
+                 stmt
+                 (LLInternalExpr Nothing "bind_error_callback" []))
                (LLInternalExpr Nothing "bind_error_callback" [])
       go (TRecordMatchExpr fields, _) res = do
         stmt <- execLL $ mapM_ (\(s, me) -> do
@@ -315,10 +336,11 @@ module LLTranslate where
         tell $ LLPred IsRecord res
                stmt
                (LLInternalExpr Nothing "bind_error_callback" [])
-      go (TVarMatch s, _) res =
+      go (TVarMatch s, _) res = do
        modify (first $ Map.insert s
                  Access{read = return s,
-                        write = void . tell . LLAssign s})
+                        write = tell . LLAssign s})
+       tell $ LLAssign s res
       go (TIntMatchExpr n, _) res =
         tell $ LLPred (IsInt n) res
                  LLNop
@@ -337,7 +359,7 @@ module LLTranslate where
       TVarExpr s ->
         modify (first $ Map.insert s
                   Access{read = return s,
-                         write = void . tell . LLAssign s})
+                         write = tell . LLAssign s})
       TFieldAccessExpr lve s -> do
         base <- transLval lve
         tell $ LLSetField base s res
