@@ -52,9 +52,9 @@ ppPred IsList = text "IsList"
 ppPred (HasLength n) = text "HasLength" <+> text (show n)
 ppPred IsRecord = text "IsRecord"
 ppPred (HasField s) = text "HasField" <+> text (show s)
-ppPred(IsInt n) = text "IsInt" <+> text (show n)
-ppPred(IsString s) = text "IsString" <+> text s
-ppPred(IsBool b) = text "IsBool" <+> text (show b)
+ppPred IsInt = text "IsInt"
+ppPred IsString = text "IsString"
+ppPred IsBool = text "IsBool"
 
 ppLLStmt :: LLStatement -> Doc
 ppLLStmt (LLLitExpr ident lit) =
@@ -120,9 +120,13 @@ ppLLStmt (LLFor gen_i i list_ident body) =
     nest 2 (ppLLStmt gen_i) $$
     nest 2 (ppIdentWithId i <+> text "in" <+> ppIdentWithId list_ident) $$
     nest 2 (ppLLStmt body)
+ppLLStmt (LLMatch stmts) =
+  text "match" $$
+    nest 2 (vcat (List.map ppLLStmt stmts))
 ppLLStmt (LLSeq stmt1 stmt2) = ppLLStmt stmt1 $$ ppLLStmt stmt2
 ppLLStmt (LLReturn ident) = text "return" <+> ppIdentWithId ident
 ppLLStmt LLBreak = text "break"
 ppLLStmt LLContinue = text "continue"
+ppLLStmt LLNext = text "next"
 ppLLStmt (LLDeclare decl) = ppLLDecl decl
 ppLLStmt LLNop = text "nop"

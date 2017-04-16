@@ -80,7 +80,7 @@ mergeEnv env1 env2 = do
   where f (name, (uniq, ty)) =
           do env <- environment
              case Map.lookup name env of
-               Nothing -> modifyEnv (Map.insert name (uniq, ty))
+               Nothing -> modifyEnv (Map.insert name (uniq, ty `tunion` TTuple []))
                Just (uniq, ty') -> do
                 argord <- argumentOrder
                 let m = argord ! Identifier (name, uniq)
@@ -102,7 +102,7 @@ isFunDecl :: Decl -> Bool
 isFunDecl FunDecl{} = True
 isFunDecl _ = False
 
-infer :: [Decl] -> IO ([TypedDecl], Env, Map Identifier FunctionInfo)
+infer :: [Decl] -> IO ([TypedDecl], Env)
 infer decls = do
   let typedecls = List.filter isTypeDecl decls
   let fundecls = List.filter isFunDecl decls
@@ -119,17 +119,11 @@ infer decls = do
   (fundecls', st') <- runStateT (mapM inferDecl fundecls) (st {env = env''})
   let fundecls'' = List.map (replaceDecl (subst st') (env st')) fundecls'
   let env''' = Map.map (second (replaceType (subst st') (env st'))) (env st')
-
-  return (typedecls'' ++ fundecls'', env''', allFuncs st')
+  return (typedecls'' ++ fundecls'', env''')
 
 insertArgOrd :: Identifier -> [Identifier] -> Infer ()
 insertArgOrd name targs =
   modifyArgOrd $ Map.insert name (Map.fromList (List.zip [0..] targs))
-
-addFuncs :: Map Identifier FunctionInfo -> Infer ()
-addFuncs fs = do
-  funcs <- gets allFuncs
-  modify $ \st -> st {allFuncs = fs `Map.union` funcs}
 
 transTy :: Type -> Infer TType
 transTy IntType = return TIntType
@@ -190,11 +184,11 @@ inferDecl (TypeDecl name targs ty) = do
 
 inferDecl (FunDecl name tyArgs args retTy statement) = do
   tyArgs' <- lift $ mapM fromString tyArgs
+  env <- environment
   mapM_ (\ident -> do
           t <- lift mkTypeVar
           modifyEnv (Map.insert (stringOf ident) (idOf ident, t))) tyArgs'
   args' <- mapM (inferMatchExpr Nothing) args
-
   retTy' <- maybe (lift mkTypeVar) transTy retTy
   let types = List.map snd args'
   funTy <- foldrM makeForall (makeArrow types retTy') types
@@ -202,20 +196,18 @@ inferDecl (FunDecl name tyArgs args retTy statement) = do
   modifyEnv (Map.insert name (idOf funId, funTy))
   (statement', st) <- local $ inferStatement statement
   modifySubst (const $ subst st)
-  addFuncs (allFuncs st)
   infRetTy <- mergeReturns statement'
-
   subtype retTy' infRetTy >>= \case
     Just retTy -> do
       funTy' <- foldrM makeForall (makeArrow types retTy) types
+      modifyEnv (const env)
       modifyEnv (Map.insert name (idOf funId, funTy'))
-      addFunc funId tyArgs' args' funTy' statement'
-      return (funId, TFunDecl tyArgs' args' retTy statement')
+      return (funId, TFunDecl tyArgs' args' funTy' statement')
     Nothing -> do
       errorCannotMatchExpectedWithActual retTy' infRetTy >>= liftIO . putStrLn
+      modifyEnv (const env)
       modifyEnv (Map.insert name (idOf funId, TError))
-      addFunc funId tyArgs' args' TError statement'
-      return (funId, TFunDecl tyArgs' args' retTy' statement')
+      return (funId, TFunDecl tyArgs' args' TError statement')
 
 commMaybeInfer :: Maybe (Infer a) -> Infer (Maybe a)
 commMaybeInfer (Just i) = fmap Just i
@@ -306,7 +298,6 @@ inferStatement (IfStatement e s Nothing) = do
   (s', st) <- local $ inferStatement s
   mergeSubstWith (subst st)
   mergeEnvWith (env st)
-  addFuncs (allFuncs st)
   return $ TIfStatement e' s' Nothing
 
 inferStatement (IfStatement e sThen (Just sElse)) = do
@@ -315,7 +306,6 @@ inferStatement (IfStatement e sThen (Just sElse)) = do
   (sElse', stElse) <- local $ inferStatement sElse
   mergeSubstitution (subst stThen) (subst stElse)
   mergeEnv (env stThen) (env stElse)
-  addFuncs (allFuncs stThen `Map.union` allFuncs stElse)
   return $ TIfStatement e' sThen' (Just sElse')
 
 inferStatement (WhileStatement e s) = do
@@ -323,7 +313,6 @@ inferStatement (WhileStatement e s) = do
   (s', st) <- local $ inferStatement s
   mergeSubstWith (subst st)
   mergeEnvWith (env st)
-  addFuncs (allFuncs st)
   return $ TWhileStatement e' s'
 
 inferStatement (ForStatement me e s) = do
@@ -339,7 +328,6 @@ inferStatement (ForStatement me e s) = do
   (s', st) <- local $ inferStatement s
   mergeSubstWith (subst st)
   mergeEnvWith (env st)
-  addFuncs (allFuncs st)
   return $ TForStatement me' e' s'
 
 inferStatement (CompoundStatement ss) = do
@@ -579,13 +567,7 @@ inferExpr (LambdaExpr mes s) = do
   s' <- inferStatement s
   ty <- mergeReturns s'
   let funTy = makeArrow (List.map snd mes') ty
-  name <- genFunId funTy s'
-  addFunc name [] mes' funTy s'
   return (TLambdaExpr mes' s', funTy)
-
-genFunId :: TType -> TypedStatement -> Infer Identifier
-genFunId ty stmt =
-  lift . fromString $ "t" ++ show (hash ty `combine` hash stmt)
 
 mergeReturns :: TypedStatement -> Infer TType
 mergeReturns s =

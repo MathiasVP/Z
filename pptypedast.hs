@@ -11,13 +11,13 @@ ppAst decls = render $ vcat (List.map ppTypedDecl decls)
 ppTypedDeclData :: TypedDeclData -> Doc
 ppTypedDeclData (TTypeDecl ty) =
   ppTType ty
-ppTypedDeclData (TFunDecl [] tmes retTy body) =
+ppTypedDeclData (TFunDecl [] tmes ty body) =
   parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
-  text "->" <+> ppTType retTy <+> equals $$ ppTypedStatement body
-ppTypedDeclData (TFunDecl tyargs tmes retTy body) =
+  char ':' <+> ppTType ty <+> equals $$ ppTypedStatement body
+ppTypedDeclData (TFunDecl tyargs tmes ty body) =
   char '<' <> commaSep (List.map ppIdentWithId tyargs) <> char '>' <+>
   parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
-  text "->" <+> ppTType retTy <+> equals $$ ppTypedStatement body
+  char ':' <+> ppTType ty <+> equals $$ ppTypedStatement body
 
 ppTypedMatchExpr :: TypedMatchExpr -> Doc
 ppTypedMatchExpr (TTupleMatchExpr tmexprs, _) =

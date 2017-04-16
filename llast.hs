@@ -31,9 +31,10 @@ data Pred
   | HasLength Int -- Precondition: IsList
   | IsRecord
   | HasField String -- Precondition: IsRecord
-  | IsInt Int
-  | IsString String
-  | IsBool Bool
+  | IsInt
+  | IsString
+  | IsBool
+  | IsReal
   deriving Show
 
 data LLStatement
@@ -56,10 +57,12 @@ data LLStatement
   | LLPred Pred Identifier LLStatement LLStatement
   | LLWhile LLStatement Identifier LLStatement
   | LLFor LLStatement Identifier Identifier LLStatement
+  | LLMatch [LLStatement]
   | LLSeq LLStatement LLStatement
   | LLReturn Identifier
   | LLBreak
   | LLContinue
+  | LLNext
   | LLDeclare LLDecl
   | LLNop
   deriving Show

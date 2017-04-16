@@ -13,7 +13,7 @@ main = let path = "test.z"
              case P.parse content of
                Left err -> print err
                Right ast -> do
-                 (typed, env, _) <- T.infer ast
+                 (typed, env) <- T.infer ast
                  putStrLn $ PP.ppAst typed
                  ll <- LL.translate env typed
                  putStrLn (PPLL.ppLLAst ll)

@@ -24,24 +24,14 @@ type ArgOrd = Map Identifier (Map Int Identifier)
 type Bindings = Map Identifier TType
 type Trace = Set Identifier
 
-data FunctionInfo
-  = FunctionInfo { name :: Identifier
-                  , targs :: [Identifier]
-                  , args :: [TypedMatchExpr]
-                  , funty :: TType
-                  , body :: TypedStatement }
-  deriving Show
-
 data InferSt = InferSt { subst :: Substitution
                        , env :: Env
-                       , argOrd :: ArgOrd
-                       , allFuncs :: Map Identifier FunctionInfo }
+                       , argOrd :: ArgOrd }
 
 emptySt :: InferSt
 emptySt = InferSt { subst = Map.empty
                   , env = Map.empty
-                  , argOrd = Map.empty
-                  , allFuncs = Map.empty }
+                  , argOrd = Map.empty }
 
 type Infer a = StateT InferSt IO a
 
@@ -68,16 +58,6 @@ modifyEnv f = modify $ \st -> st { env = f (env st) }
 
 modifyArgOrd :: (ArgOrd -> ArgOrd) -> Infer ()
 modifyArgOrd f = modify $ \st -> st { argOrd = f (argOrd st) }
-
-addFunc :: Identifier -> [Identifier] -> [TypedMatchExpr]
-            -> TType -> TypedStatement -> Infer ()
-addFunc name targs mes ty stmt =
-  modify $ \st -> st { allFuncs =
-    Map.insert name FunctionInfo{ name = name
-                                , targs = targs
-                                , args = mes
-                                , funty = ty
-                                , body = stmt} (allFuncs st) }
 
 exprOf :: (a, b) -> a
 exprOf = fst

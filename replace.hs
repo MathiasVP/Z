@@ -79,10 +79,10 @@ replaceDeclData subst env td =
   case td of
     TTypeDecl t ->
       TTypeDecl (replaceType subst env t)
-    TFunDecl typeargs args retTy s ->
+    TFunDecl typeargs args ty s ->
       TFunDecl (List.map (replaceIdent subst env) typeargs)
         (List.map (replaceMatchExpr subst env) args)
-                                  (replaceType subst env retTy)
+                                  (replaceType subst env ty)
                                   (replaceStatement subst env s)
 
 replaceMatchExpr :: Substitution -> Env -> TypedMatchExpr -> TypedMatchExpr

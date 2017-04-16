@@ -218,7 +218,7 @@ subtype t1 t2 =
     sub trace bind1 bind2 ty (TUnion t1 t2) = do
       (c1, t1') <- sub trace bind1 bind2 ty t1
       (c2, t2') <- sub trace bind1 bind2 ty t2
-      return (c1 /\ c2, tunion t1' t2')
+      return (c1 \/ c2, t1' `tunion` t2')
     sub trace bind1 bind2 (TArrow tDom1 tCod1) (TArrow tDom2 tCod2) = do
       (c1, tDom) <- sub trace bind1 bind2 tDom1 tDom2
       (c2, tCod) <- sub trace bind1 bind2 tCod2 tCod1
