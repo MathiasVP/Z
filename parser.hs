@@ -22,9 +22,8 @@ typeDecl = do
     string "type"
     spaces
     name <- id_
-    typevarsM <- optionMaybe $ char '<' >> spaces' >>
-                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
-                     spaces' <* char '>'
+    spaces
+    typevarsM <- optionMaybe $ sepBy1 id_ (spaces' >> char ',' >> spaces')
     spaces
     char '='
     spaces
@@ -34,46 +33,22 @@ typeDecl = do
 
 funDecl :: IParser Decl
 funDecl = withPos $ do
+    typevarsM <-
+      optionMaybe $ string "forall" >> spaces' >>
+                    sepBy1 id_ spaces' <* char '.' <* spaces
     string "fun"
     spaces'
     name <- id_
     spaces'
-    typevarsM <- optionMaybe $ char '<' >> spaces' >>
-                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
-                     spaces' <* char '>'
-    spaces'
     args <- sepBy1 matchExpr spaces'
     spaces'
     typeM <- optionMaybe $ try $ string "->" >> spaces' >> type_
-    spaces'
-    char '='
-    spaces
+    spaces' >> char '=' >> spaces
     sameOrIndented
     s <- block statement
     spaces
     --fundecls <- many (funDeclWithName name) --TODO: ML style function level pattern matching
     return $ FunDecl name (fromMaybe [] typevarsM) args typeM (makeCompound s)
-
-funDeclWithName :: String -> IParser (String, [String], [MatchExpr], Maybe Type, Statement)
-funDeclWithName name = do
-    string "fun"
-    spaces'
-    string name
-    spaces'
-    typevarsM <- optionMaybe $ char '<' >> spaces' >>
-                   sepBy1 id_ (spaces' >> char ',' >> spaces') <*
-                     spaces' <* char '>'
-    spaces'
-    args <- sepBy1 matchExpr spaces'
-    spaces'
-    typeM <- optionMaybe $ string "->" >> spaces' >> type_
-    spaces'
-    char '='
-    spaces
-    sameOrIndented
-    s <- block statement
-    spaces
-    return (name, fromMaybe [] typevarsM, args, typeM, makeCompound s)
 
 decl :: IParser Decl
 decl = funDecl
@@ -153,7 +128,7 @@ nameType = do
             else if name == "Real" then Just RealType
             else if name == "String" then Just StringType
             else Nothing
-    tys <- option [] (char '<' >> sepBy1 type_ (spaces' >> char ',' >> spaces') <* char '>')
+    tys <- option [] (sepBy1 type_ spaces')
     spaces'
     return $ fromMaybe (Name name tys) t
 

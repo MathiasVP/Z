@@ -85,9 +85,7 @@ replaceDeclData ident td =
   case td of
     TTypeDecl t -> do
       t' <- replaceTypeHelper t (Just (stringOf ident))
-      environment >>= liftIO . print
       modifyEnv $ Map.update (Just . second (const t')) (stringOf ident)
-      environment >>= liftIO . print
       return $ TTypeDecl t'
     TFunDecl args ty s -> do
       args' <- mapM replaceMatchExpr args

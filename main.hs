@@ -1,11 +1,12 @@
 {-
- We should move to a better representation of recursive types:
+  TODO:
+  Explicit type variables should not be identified with other variables during
+  type inference. i.e. it should not be possible to write a function with the
+  type (not counting a possible looping term):
 
- type A = () | B
- type B = () | A
-
- A should be represented as (μ a. () | (μ b. () | a))
-
+  forall A B.
+    fun f (x : A) -> B =
+      ...
 -}
 
 import Parser as P

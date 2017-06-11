@@ -12,10 +12,12 @@ ppTypedDeclData :: TypedDeclData -> Doc
 ppTypedDeclData (TTypeDecl ty) =
   ppTType ty
 ppTypedDeclData (TFunDecl tmes ty body) =
-  hsep (List.map (ppTypedMatchExpr False) tmes) <+>
+  hsep (List.map (ppTypedMatchExpr True) tmes) <+>
   char ':' <+> ppTType ty <+> equals $$ ppTypedStatement body
 
 ppTypedMatchExpr :: Bool -> TypedMatchExpr -> Doc
+ppTypedMatchExpr b (TTupleMatchExpr [tmexpr], _) =
+  ppTypedMatchExpr b tmexpr
 ppTypedMatchExpr b (TTupleMatchExpr tmexprs, _) =
   parens $ commaSep $ List.map (ppTypedMatchExpr b) tmexprs
 ppTypedMatchExpr b (TListMatchExpr tmexprs, _) =
