@@ -15,7 +15,6 @@ import qualified PPLLAst as PPLL
 import qualified LLTranslate as LL
 --import qualified InferFieldOffsets as IFO
 --import qualified CallGraph as CG
-import Text.Groom
 
 main :: IO ()
 main = let path = "test.z"

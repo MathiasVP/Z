@@ -24,9 +24,9 @@ data TType
   | TError
     deriving (Eq, Ord)
 
-
 instance Show TType where
   show ty = render (ppTType ty)
+  
 -------------------------------------------------------
 -- Type simplications
 -------------------------------------------------------
