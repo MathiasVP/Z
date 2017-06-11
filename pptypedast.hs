@@ -11,27 +11,24 @@ ppAst decls = render $ vcat (List.map ppTypedDecl decls)
 ppTypedDeclData :: TypedDeclData -> Doc
 ppTypedDeclData (TTypeDecl ty) =
   ppTType ty
-ppTypedDeclData (TFunDecl [] tmes ty body) =
-  parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
-  char ':' <+> ppTType ty <+> equals $$ ppTypedStatement body
-ppTypedDeclData (TFunDecl tyargs tmes ty body) =
-  char '<' <> commaSep (List.map ppIdentWithId tyargs) <> char '>' <+>
-  parens (hsep (List.map ppTypedMatchExpr tmes)) <+>
+ppTypedDeclData (TFunDecl tmes ty body) =
+  hsep (List.map (ppTypedMatchExpr False) tmes) <+>
   char ':' <+> ppTType ty <+> equals $$ ppTypedStatement body
 
-ppTypedMatchExpr :: TypedMatchExpr -> Doc
-ppTypedMatchExpr (TTupleMatchExpr tmexprs, _) =
-  parens $ commaSep $ List.map ppTypedMatchExpr tmexprs
-ppTypedMatchExpr (TListMatchExpr tmexprs, _) =
-  brackets $ commaSep $ List.map ppTypedMatchExpr tmexprs
-ppTypedMatchExpr (TRecordMatchExpr fields, _) =
+ppTypedMatchExpr :: Bool -> TypedMatchExpr -> Doc
+ppTypedMatchExpr b (TTupleMatchExpr tmexprs, _) =
+  parens $ commaSep $ List.map (ppTypedMatchExpr b) tmexprs
+ppTypedMatchExpr b (TListMatchExpr tmexprs, _) =
+  brackets $ commaSep $ List.map (ppTypedMatchExpr b) tmexprs
+ppTypedMatchExpr b (TRecordMatchExpr fields, _) =
   braces $ commaSep (List.map (\(name, tmexpr) ->
-    text name <+> equals <+> ppTypedMatchExpr tmexpr) fields)
-ppTypedMatchExpr (TVarMatch ident, ty) =
+    text name <+> equals <+> ppTypedMatchExpr b tmexpr) fields)
+ppTypedMatchExpr True (TVarMatch ident, ty) =
   text "(" <> ppIdentWithId ident <+> colon <+> ppTType ty <> text ")"
-ppTypedMatchExpr (TIntMatchExpr n, _) = text $ show n
-ppTypedMatchExpr (TStringMatchExpr s, _) = text "\"" <> text s <> text "\""
-ppTypedMatchExpr (TBoolMatchExpr b, _) = text $ show b
+ppTypedMatchExpr False (TVarMatch ident, _) = ppIdentWithId ident
+ppTypedMatchExpr _ (TIntMatchExpr n, _) = text $ show n
+ppTypedMatchExpr _ (TStringMatchExpr s, _) = text "\"" <> text s <> text "\""
+ppTypedMatchExpr _ (TBoolMatchExpr b, _) = text $ show b
 
 ppTypedStatement :: TypedStatement -> Doc
 ppTypedStatement (TIfStatement texpr thenStmt (Just elseStmt)) =
@@ -44,17 +41,17 @@ ppTypedStatement (TIfStatement texpr thenStmt Nothing) =
 ppTypedStatement (TWhileStatement texpr body) =
   text "while" <+> ppTypedExpr texpr $$ nest 2 (ppTypedStatement body)
 ppTypedStatement (TForStatement tmexpr texpr body) =
-  text "for" <+> ppTypedMatchExpr tmexpr <+> text "in" <+>
+  text "for" <+> ppTypedMatchExpr True tmexpr <+> text "in" <+>
   ppTypedExpr texpr <+> char ':' $$
     nest 2 (ppTypedStatement body)
 ppTypedStatement (TCompoundStatement stmts) =
   braces $ vcat (List.map ppTypedStatement stmts)
 ppTypedStatement (TAssignStatement lhs texpr) =
-  either ppTypedMatchExpr ppTypedLValueExpr lhs <+>
+  either (ppTypedMatchExpr True) ppTypedLValueExpr lhs <+>
   char '=' <+> ppTypedExpr texpr
 ppTypedStatement (TMatchStatement texpr matches) =
   text "match" <+> ppTypedExpr texpr <+> char ':' $$
-  vcat (List.map (\(tmexpr, stmt) -> ppTypedMatchExpr tmexpr <+>
+  vcat (List.map (\(tmexpr, stmt) -> ppTypedMatchExpr True tmexpr <+>
   text "=>" $$ nest 2 (ppTypedStatement stmt)) matches)
 ppTypedStatement (TReturnStatement texpr) = text "return" <+> ppTypedExpr texpr
 ppTypedStatement TBreakStatement = text "break"
@@ -124,5 +121,5 @@ ppTypedExpr (TRecordExpr fields, _) =
     text name <+> equals <+> ppTypedExpr texpr) fields)
 ppTypedExpr (TLValue tlve, _) = ppTypedLValueExpr tlve
 ppTypedExpr (TLambdaExpr targs body, _) =
-  parens $ text "fn" <+> hsep (List.map ppTypedMatchExpr targs) <+>
+  parens $ text "fn" <+> hsep (List.map (ppTypedMatchExpr False) targs) <+>
     text "=>" $$ nest 2 (ppTypedStatement body)

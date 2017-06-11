@@ -13,6 +13,10 @@ foldlWithKeyM f acc = Map.foldlWithKey f' (return acc)
     where
         f' ma k b = ma >>= \a -> f a k b
 
+mapWithKeyM :: (Monad m, Ord k) => (k -> a -> m b) -> Map k a -> m (Map k b)
+mapWithKeyM f = foldlWithKeyM g Map.empty
+  where g m k v = f k v >>= \v' -> return (Map.insert k v' m)
+
 findM :: (Monad m) => (a -> m (Maybe b)) -> [a] -> m (Maybe b)
 findM f = runMaybeT . msum . map (MaybeT . f)
 

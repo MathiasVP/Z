@@ -1,3 +1,13 @@
+{-
+ We should move to a better representation of recursive types:
+
+ type A = () | B
+ type B = () | A
+
+ A should be represented as (μ a. () | (μ b. () | a))
+
+-}
+
 import Parser as P
 import qualified TypeInfer as T
 import qualified PPTypedAst as PP
@@ -15,8 +25,8 @@ main = let path = "test.z"
                Right ast -> do
                  (typed, env) <- T.infer ast
                  putStrLn $ PP.ppAst typed
-                 ll <- LL.translate env typed
-                 putStrLn (PPLL.ppLLAst ll)
+                 --ll <- LL.translate env typed
+                 --putStrLn (PPLL.ppLLAst ll)
                  --let cg = CG.construct env funcs typed
                  --putStrLn (groom cg)
                  --let fieldMap = IFO.construct env typed

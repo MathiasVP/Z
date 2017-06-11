@@ -60,6 +60,7 @@ invert v = v
 maxNumberOfUnrolls :: Int
 maxNumberOfUnrolls = 10
 
+{-
 variance :: TType -> Identifier -> Infer Variance
 variance t s =
   let var trace v (TName s' tys)
@@ -92,13 +93,9 @@ variance t s =
         vs <- mapM (var trace v . snd) fields
         return $ lubs vs
       var trace v (TArray ty) = var trace v ty
-      var trace v (TIntersect t1 t2) = do
-        v1 <- var trace v t1
-        v2 <- var trace v t2
-        return $ v1 \/ v2
       var _ v _ = return v
   in var Set.empty Bottom t
-
+-}
 data TypeCost
   = Free
   | Cost Integer
@@ -133,13 +130,13 @@ subtype t1 t2 =
     sub :: Map Identifier Int -> Bindings -> Bindings ->
                TType -> TType -> Infer (TypeCost, TType)
     sub trace bind1 bind2 (TForall u t1) t2 =
-      do TTypeVar u' <- lift mkTypeVar
+      do TTypeVar u' <- liftIO mkTypeVar
          (c, t) <- sub trace bind1 bind2 (rename u' u t1) t2
          free (TTypeVar u') >>= \case
           True -> return (c, t)
           False -> return (c, TForall u' t) {- TODO: This doesn't really make sense? -}
     sub trace bind1 bind2 t1 (TForall u t2) =
-      do TTypeVar u' <- lift mkTypeVar
+      do TTypeVar u' <- liftIO mkTypeVar
          (c, t) <- sub trace bind1 bind2 t1 (rename u' u t2)
          free (TTypeVar u') >>= \case
           True -> return (c, TForall u' t)
@@ -158,43 +155,9 @@ subtype t1 t2 =
           modifySubst (Map.insert u t2')
           return (Cost 1, TTypeVar u)
         ty -> sub trace bind1 bind2 ty t2
-    sub trace bind1 bind2 (TName s1 tys1) (TName s2 tys2) =
-      if s1 == s2 && Map.notMember s1 bind1 && Map.notMember s2 bind2 then do
-          env <- environment
-          let (_, ty) = env ! stringOf s1
-          vars <- mapM (variance ty) (Map.keys bind1)
-          (c, tys) <- foldM f (Free, []) (List.zip3 tys1 tys2 vars)
-          return (c, TName s1 tys)
-      else do
-          t1 <- lookup bind1 s1
-          t2 <- lookup bind2 s2
-          sub trace bind1 bind2 t1 t2
-       where f (c, ts) (t1, t2, Positive) | c /= Impossible = do
-               (c', t) <- sub trace bind1 bind2 t1 t2
-               return (c \/ c', ts ++ [t])
-             f (c, ts) (t1, t2, Negative) | c /= Impossible = do
-               (c', t) <- sub trace bind1 bind2 t2 t1
-               return (c \/ c', ts ++ [t])
-             f (c, t) (_, _, Bottom) = return (c, t)
-             f (_, t) _ = return (Impossible, t)
-    sub trace bind1 bind2 (TName s tys) ty =
-      case Map.lookup s trace of
-        Just n | n >= maxNumberOfUnrolls ->
-          (liftIO . putStrLn) "Maximum depth reached" >>
-            return (Impossible, TError)
-        _ -> do
-          t <- lookup bind1 s
-          tys' <- mapM (`reduce` bind1) tys
-          bind1' <- makeBindings s bind1 tys'
-          sub (updateOrElse (+1) 0 s trace) bind1' bind2 t ty
-    sub trace bind1 bind2 ty (TName s tys) =
-      case Map.lookup s trace of
-        Just n | n >= maxNumberOfUnrolls -> return (Impossible, TError)
-        _ -> do
-          t <- lookup bind2 s
-          tys' <- mapM (`reduce` bind2) tys
-          bind2' <- makeBindings s bind2 tys'
-          sub (updateOrElse (+1) 0 s trace) bind1 bind2' ty t
+    sub trace bind1 bind2 (TMu ident1 ty1) (TMu ident2 ty2) = error "TODO"
+    sub trace bind1 bind2 (TMu s ty1) ty2 = error "TODO"
+    sub trace bind1 bind2 ty1 (TMu ident ty2) = error "TODO"
     sub trace bind1 bind2 (TUnion t11 t12) (TUnion t21 t22) = do
       let poss =
             [(sub trace bind1 bind2 t11 t21, sub trace bind1 bind2 t12 t21),
@@ -246,16 +209,11 @@ subtype t1 t2 =
                 return (c \/ c', fields ++ [(name, ty'')])
               Nothing -> return $ if mut2 then (c, fields)
                                   else (Impossible, fields ++ [(name, TError)])
-    sub trace bind1 bind2 (TIntersect t1 t2) ty = do
-      (c1, t1') <- sub trace bind1 bind2 ty t1
-      (c2, t2') <- sub trace bind1 bind2 ty t2
-      return (c1 /\ c2, tunion t1' t2')
-    sub trace bind1 bind2 ty (TIntersect t1 t2) = do
-      st <- get
-      (r1, st1) <- liftIO $ runInfer (sub trace bind1 bind2 ty t1) st
-      (r2, st2) <- liftIO $ runInfer (sub trace bind1 bind2 ty t2) st
-      if fst r1 < fst r2 then modify (const st1) >> return r1
-      else modify (const st2) >> return r2
+    sub _ _ _ TIntType TNumber = return (Free, TNumber)
+    sub _ _ _ TNumber TIntType  = return (Free, TIntType)
+    sub _ _ _ TRealType TNumber = return (Free, TNumber)
+    sub _ _ _ TNumber TRealType  = return (Free, TRealType)
+    sub _ _ _ TNumber TNumber = return (Free, TNumber)
     sub _ _ _ TIntType TIntType = return (Free, TIntType)
     sub _ _ _ TIntType TRealType = return (Cost 0, TRealType)
     sub _ _ _ TRealType TRealType = return (Free, TRealType)

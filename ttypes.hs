@@ -4,89 +4,35 @@ import Hash
 import Text.PrettyPrint
 import Data.Map()
 import Data.Foldable()
-import Data.Hashable
 
 data TType
   = TIntType
   | TBoolType
   | TStringType
   | TRealType
-  | TName Identifier [TType]
+  | TNumber
+  | TMu Identifier TType
   | TArray TType
   | TTuple [TType]
   | TRecord Bool [(String, TType)]
   | TForall Identifier TType
   | TArrow TType TType
   | TUnion TType TType
-  | TIntersect TType TType
   | TTypeVar Identifier
-  | TRef String [TType]
+  | TTypeApp TType TType
+  | TRef String
   | TError
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord)
 
-instance Hashable TType where
-  hashWithSalt n TIntType = n `combine` 3
-  hashWithSalt n TBoolType = n `combine` 5
-  hashWithSalt n TStringType = n `combine` 7
-  hashWithSalt n TRealType = n `combine` 7
-  hashWithSalt n (TName name tys) =
-    hashWithSalt n (name, tys)
-  hashWithSalt n (TArray ty) =
-    hashWithSalt n ty `combine` 9
-  hashWithSalt n (TTuple tys) =
-    hashWithSalt n tys `combine` 11
-  hashWithSalt n (TRecord _ fields) =
-    hashWithSalt n fields `combine` 13
-  hashWithSalt n (TForall uint ty) =
-    hashWithSalt n (uint, ty) `combine` 15
-  hashWithSalt n (TArrow tyDom tyCod) =
-    hashWithSalt n (tyDom, tyCod) `combine` 17
-  hashWithSalt n (TUnion ty1 ty2) =
-    hashWithSalt n (ty1, ty2) `combine` 19
-  hashWithSalt n (TIntersect ty1 ty2) =
-    hashWithSalt n (ty1, ty2) `combine` 23
-  hashWithSalt n (TRef name tys) =
-    hashWithSalt n (name, tys) `combine` 29
-  hashWithSalt n (TTypeVar u) =
-    hashWithSalt n u `combine` 29
-  hashWithSalt n TError = n `combine` 31
 
-{-
-instance Show Type where
-  show IntType = "Int"
-  show BoolType = "Bool"
-  show StringType = "String"
-  show RealType = "Real"
-
-  show (Union t1 (Union t2 t3)) = show t1 ++ " | " ++ "(" ++ show t2 ++ " | " ++ show t3 ++ ")"
-  show (Union t1 t2) = show t1 ++ " | " ++ show t2
-
-  show (Intersect t1 (Intersect t2 t3)) = show t1 ++ " & (" ++ show t2 ++ " & " ++ show t3 ++ ")"
-
-  show (Intersect t1 (Union t2 t3)) = show t1 ++ " & (" ++ show t2 ++ " | " ++ show t3 ++ ")"
-  show (Intersect (Union t1 t2) t3) = "(" ++ show t1 ++ " | " ++ show t2 ++ ") & " ++ show t1
-  show (Intersect t1 t2) = show t1 ++ " & " ++ show t2
-
-  show (Arrow t1 (Union t2 t3)) = show t1 ++ " -> (" ++ show t2 ++ " | " ++ show t3 ++ ")"
-  show (Arrow (Union t1 t2) t3) = "(" ++ show t1 ++ " | " ++ show t2 ++ ") -> " ++ show t3 ++ ")"
-  show (Arrow (Arrow t1 t2) t3) = "(" ++ show t1 ++ " -> " ++ show t2 ++ ")" ++ " -> " ++ show t3
-  show (Arrow t1 t2) = show t1 ++ " -> " ++ show t2
-
-  show (Name s []) = s
-  show (Name s tys) = s ++ "<" ++ (List.intercalate ", " (List.map show tys)) ++ ">"
-  show (Array t) = "[" ++ show t ++ "]"
-  show (Tuple tys) = "(" ++ List.intercalate "," (List.map show tys) ++ ")"
-  show (Record _ fields) = "{" ++ List.intercalate ", " (List.map showField fields) ++ "}"
-    where showField (s, t) = s ++ ": " ++ show t
-  show (Forall u ty) = "forall " ++ show u ++ ". " ++ show ty
-  show (TypeVar u) = show u
-  show Error = "Error"
--}
+instance Show TType where
+  show ty = render (ppTType ty)
 -------------------------------------------------------
 -- Type simplications
 -------------------------------------------------------
 tcontains :: TType -> TType -> Bool
 tcontains TIntType TIntType = True
+tcontains TNumber TNumber = True
 tcontains TBoolType TBoolType = True
 tcontains TStringType TStringType = True
 tcontains TRealType TRealType = True
@@ -94,13 +40,10 @@ tcontains (TUnion t1 t2) t3
   | t1 == t3 = True
   | t2 == t3 = True
   | otherwise = tcontains t1 t3 || tcontains t1 t3
-tcontains (TIntersect t1 t2) t3
-  | t1 == t3 && t2 == t3 = True
-  | otherwise = tcontains t1 t3 && tcontains t1 t3
 tcontains (TArrow t1 t2) (TArrow t3 t4) =
   t1 == t3 && t2 == t4
-tcontains (TName s1 tys1) (TName s2 tys2) =
-  s1 == s2 && tys1 == tys2
+tcontains (TMu u1 ty1) (TMu u2 ty2) =
+  u1 == u2 && ty1 == ty2
 tcontains (TArray t1) (TArray t2) =
   t1 == t2
 tcontains (TTuple tys1) (TTuple tys2)
@@ -126,12 +69,6 @@ tunion t1 t2
   | t1 `tcontains` t2 = t1
   | otherwise = TUnion t1 t2
 
-tintersect :: TType -> TType -> TType
-tintersect t1 (TIntersect t2 t3) = (t1 `tintersect` t2) `tintersect` t3
-tintersect t1 t2
-  | t1 `tcontains` t2 = t2
-  | otherwise = TIntersect t1 t2
-
 ppIdent :: Identifier -> Doc
 ppIdent = text . stringOf
 
@@ -146,9 +83,9 @@ ppTType TIntType = text "Int"
 ppTType TBoolType = text "Bool"
 ppTType TStringType = text "String"
 ppTType TRealType = text "Real"
-ppTType (TName ident []) = ppIdentWithId ident
-ppTType (TName ident tys) =
-  ppIdentWithId ident <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
+ppTType TNumber = text "Number"
+ppTType (TMu ident ty) =
+  text "μ" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType (TArray ty) = brackets $ ppTType ty
 ppTType (TTuple tys) = parens $ commaSep $ List.map ppTType tys
 ppTType (TRecord _ fields) =
@@ -158,9 +95,7 @@ ppTType (TForall ident ty) =
   parens $ text "∀" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType (TArrow ty1 ty2) = ppTType ty1 <+> text "->" <+> ppTType ty2
 ppTType (TUnion ty1 ty2) = ppTType ty1 <+> char '|' <+> ppTType ty2
-ppTType (TIntersect ty1 ty2) = ppTType ty1 <+> char '&' <+> ppTType ty2
-ppTType (TTypeVar (Identifier (s, u))) = text $ s ++ show u
-ppTType (TRef name []) = text name
-ppTType (TRef name tys) =
-  text name <> char '<' <> commaSep (List.map ppTType tys) <> char '>'
+ppTType (TTypeVar ident) = ppIdentWithId ident
+ppTType (TTypeApp ty1 ty2) = parens (ppTType ty1) <+> parens (ppTType ty2)
+ppTType (TRef name) = text name
 ppTType TError = text "Error"

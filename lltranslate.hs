@@ -116,6 +116,10 @@ module LLTranslate where
           tell $ LLPred IsBool ident LLNop failure_stmt
         verifyType ident failure_stmt TRealType =
           tell $ LLPred IsReal ident LLNop failure_stmt
+        verifyType ident failure_stmt TNumber =
+          tell $ LLPred IsInt ident
+                   LLNop
+                   (LLPred IsReal ident LLNop failure_stmt)
         verifyType ident failure_stmt TStringType =
           tell $ LLPred IsString ident LLNop failure_stmt
         verifyType ident failure_stmt (TUnion t1 t2) = do
@@ -162,7 +166,7 @@ module LLTranslate where
 
   transDecl :: TypedDecl -> LL [LLDecl] ()
   transDecl (name, TTypeDecl ty) = tell [LLTypeDecl name ty]
-  transDecl (name, TFunDecl tyargs args ty stmt) = do
+  transDecl (name, TFunDecl args ty stmt) = do
     (args', init_args) <- runLL $ mapM (\(n, me) -> do
       t <- liftIO $ fromString ("arg_" ++ show n)
       stmt <- execLL $ transMatchExpr failureCrash me

@@ -1,10 +1,13 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, TupleSections #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Replace where
 import TTypes
 import TypeUtils
 import TypedAst
+import Control.Arrow
+import Control.Lens
 import Control.Monad.State.Lazy
+import Control.Monad.Trans.Either
 import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -12,22 +15,28 @@ import Data.Set(Set)
 import Hash
 import Data.Map()
 
-replaceType :: Substitution -> Env -> TType -> TType
-replaceType subst env ty =
-  let replace :: Trace -> TType -> State (Set Identifier) TType
+replaceType :: TType -> Infer TType
+replaceType ty =
+  let replace :: Trace -> TType -> Infer TType
       replace _ TIntType = return TIntType
+      replace _ TNumber = return TNumber
       replace _ TBoolType = return TBoolType
       replace _ TStringType = return TStringType
       replace _ TRealType = return TRealType
-      replace trace (TName s types) =
-        fmap (TName s) (mapM (replace trace) types)
-      replace trace (TArray ty) = fmap TArray (replace trace ty)
+      replace trace (TMu ident ty) = do
+        ty' <- replace trace ty
+        return $ TMu ident ty'
+      replace trace (TArray ty) = do
+        ty' <- replace trace ty
+        return $ TArray ty'
       replace trace (TTuple [ty]) = replace trace ty
-      replace trace (TTuple types) =
-        fmap TTuple (mapM (replace trace) types)
-      replace trace (TRecord b fields) =
-        fmap (TRecord b) (mapM field fields)
-        where field (s, ty) = replace trace ty >>= \ty -> return (s, ty)
+      replace trace (TTuple tys) = do
+        tys' <- mapM (replace trace) tys
+        return $ TTuple tys'
+      replace trace (TRecord b fields) = do
+        fields' <- mapM field fields
+        return $ TRecord b fields'
+        where field (s, ty) = fmap (s,) (replace trace ty)
       replace trace (TArrow tDom tCod) = do
         tDom' <- replace trace tDom
         tCod' <- replace trace tCod
@@ -35,158 +44,216 @@ replaceType subst env ty =
       replace trace (TUnion t1 t2) = do
         t1' <- replace trace t1
         t2' <- replace trace t2
-        return $ tunion t1' t2'
-      replace trace (TIntersect t1 t2) = do
-        t1' <- replace trace t1
-        t2' <- replace trace t2
-        return $ tintersect t1' t2'
-      replace trace (TRef name tys) = do
-        tys' <- mapM (replace trace) tys
-        case Map.lookup name env of
-          Just (uniq, _) -> return $ TName (Identifier (name, uniq)) tys'
+        return $ TUnion t1' t2'
+      replace _ (TRef name) =
+        fmap (Map.lookup name) environment >>= \case
+          Just (_, t) -> return t
           Nothing -> error $ "Undefined type name " ++ name
       replace trace (TForall ident ty) = do
-        free <- get
-        put (Set.insert ident free)
         ty' <- replace trace ty
         return $ TForall ident ty'
       replace trace (TTypeVar ident)
         | Set.member ident trace = return $ TTypeVar ident
-        | otherwise =
-          gets (Set.member ident) >>= \case
-            True -> return $ TTypeVar ident
-            False ->
-              case Map.lookup ident subst of
-                Just ty -> replace (Set.insert ident trace) ty
-                Nothing -> return $ TTypeVar ident
+        | otherwise = do
+          subst <- substitution
+          case Map.lookup ident subst of
+            Just ty -> replace (Set.insert ident trace) ty
+            Nothing -> return $ TTypeVar ident
+      replace trace (TTypeApp t1 t2) = do
+        t1' <- replace trace t1
+        t2' <- replace trace t2
+        return $ TTypeApp t1' t2'
       replace _ TError = return TError
-  in evalState (replace Set.empty ty) Set.empty
+  in replace Set.empty ty
 
-replaceDecl :: Substitution -> Env -> TypedDecl -> TypedDecl
-replaceDecl subst env (ident, td) = (ident, replaceDeclData subst env td)
+replaceDecl :: TypedDecl -> Infer TypedDecl
+replaceDecl (ident, td) = fmap (ident, ) (replaceDeclData td)
 
-replaceIdent :: Substitution -> Env -> Identifier -> Identifier
-replaceIdent subst env ident =
-  case Map.lookup (stringOf ident) env of
-    Just (_, TTypeVar ident') ->
-      case Map.lookup ident' subst of
-        Just (TTypeVar ident'') -> ident''
-        _ -> ident'
-    _ -> ident
-
-replaceDeclData :: Substitution -> Env -> TypedDeclData -> TypedDeclData
-replaceDeclData subst env td =
+replaceDeclData :: TypedDeclData -> Infer TypedDeclData
+replaceDeclData td =
   case td of
     TTypeDecl t ->
-      TTypeDecl (replaceType subst env t)
-    TFunDecl typeargs args ty s ->
-      TFunDecl (List.map (replaceIdent subst env) typeargs)
-        (List.map (replaceMatchExpr subst env) args)
-                                  (replaceType subst env ty)
-                                  (replaceStatement subst env s)
+      TTypeDecl <$> replaceType t
+    TFunDecl args ty s -> do
+      args' <- mapM replaceMatchExpr args
+      ty' <- replaceType ty
+      s' <- replaceStatement s
+      return $ TFunDecl args' ty' s'
 
-replaceMatchExpr :: Substitution -> Env -> TypedMatchExpr -> TypedMatchExpr
-replaceMatchExpr subst env (tme, ty) =
-  let replace (TTupleMatchExpr tmes, ty) =
-        let ty' = replaceType subst env ty
-        in (TTupleMatchExpr (List.map replace tmes), ty')
-      replace (TListMatchExpr tmes, ty) =
-        let ty' = replaceType subst env ty
-        in (TListMatchExpr (List.map replace tmes), ty')
-      replace (TRecordMatchExpr fields, ty) =
-        let ty' = replaceType subst env ty
-            f (s, tme) = (s, replace tme)
-        in (TRecordMatchExpr (List.map f fields), ty')
-      replace (tme, ty) = (tme, replaceType subst env ty)
+replaceMatchExpr :: TypedMatchExpr -> Infer TypedMatchExpr
+replaceMatchExpr (tme, ty) =
+  let replace (TTupleMatchExpr tmes, ty) = do
+        ty' <- replaceType ty
+        tmes' <- mapM replace tmes
+        return (TTupleMatchExpr tmes', ty')
+      replace (TListMatchExpr tmes, ty) = do
+        ty' <- replaceType ty
+        tmes' <- mapM replace tmes
+        return (TListMatchExpr tmes', ty')
+      replace (TRecordMatchExpr fields, ty) = do
+        ty' <- replaceType ty
+        let f (s, tme) = fmap (s, ) (replace tme)
+        fields' <- mapM f fields
+        return (TRecordMatchExpr fields', ty')
+      replace (tme, ty) = fmap (tme, ) (replaceType ty)
   in replace (tme, ty)
 
-replaceStatement :: Substitution -> Env -> TypedStatement -> TypedStatement
-replaceStatement subst env ts =
-  let replace (TIfStatement te ts tsm) =
-        TIfStatement (replaceExpr subst env te) (replace ts)
-                     (fmap replace tsm)
-      replace (TWhileStatement te ts) =
-        TWhileStatement (replaceExpr subst env te) (replace ts)
-      replace (TForStatement tme te ts) =
-        TForStatement (replaceMatchExpr subst env tme)
-                      (replaceExpr subst env te) (replace ts)
-      replace (TCompoundStatement tss) =
-        TCompoundStatement (List.map replace tss)
-      replace (TAssignStatement tme_tlve te) =
-        TAssignStatement (either (Left . replaceMatchExpr subst env)
-                                 (Right . replaceLValueExpr subst env) tme_tlve)
-                         (replaceExpr subst env te)
-      replace (TMatchStatement te actions) =
-        let f (tme, ts) = (replaceMatchExpr subst env tme, replace ts)
-        in TMatchStatement (replaceExpr subst env te) (List.map f actions)
-      replace (TReturnStatement tem) =
-        TReturnStatement (replaceExpr subst env tem)
-      replace TBreakStatement = TBreakStatement
-      replace TContinueStatement = TContinueStatement
-      replace (TDeclStatement td) = TDeclStatement (replaceDecl subst env td)
-  in replace ts
+replaceStatement :: TypedStatement -> Infer TypedStatement
+replaceStatement (TIfStatement te tsTrue tsmElse) = do
+  te' <- replaceExpr te
+  tsTrue' <- replaceStatement tsTrue
+  case tsmElse of
+    Nothing -> return $ TIfStatement te' tsTrue' Nothing
+    Just tsElse -> do
+      tsElse' <- replaceStatement tsElse
+      return $ TIfStatement te' tsTrue' (Just tsElse')
+replaceStatement (TWhileStatement te ts) = do
+  te' <- replaceExpr te
+  ts' <- replaceStatement ts
+  return $ TWhileStatement te' ts'
+replaceStatement (TForStatement tme te ts) = do
+  tme' <- replaceMatchExpr tme
+  te' <- replaceExpr te
+  ts' <- replaceStatement  ts
+  return $ TForStatement tme' te' ts'
+replaceStatement (TCompoundStatement tss) =
+  fmap TCompoundStatement (mapM replaceStatement tss)
+replaceStatement (TAssignStatement tme_tlve te) =
+  replaceExpr te >>= \te ->
+    eitherT (fmap Left . replaceMatchExpr) (fmap Right . replaceLValueExpr)
+      (hoistEither tme_tlve) >>= \tme_tlve ->
+      return $ TAssignStatement tme_tlve te
+replaceStatement (TMatchStatement te actions) = do
+  let f (tme, ts) = replaceMatchExpr tme >>= \tme' ->
+        fmap (tme',) (replaceStatement ts)
+  te' <- replaceExpr te
+  actions' <- mapM f actions
+  return $ TMatchStatement te' actions'
+replaceStatement (TReturnStatement tem) =
+  fmap TReturnStatement (replaceExpr tem)
+replaceStatement TBreakStatement = return TBreakStatement
+replaceStatement TContinueStatement = return TContinueStatement
+replaceStatement (TDeclStatement td) = fmap TDeclStatement (replaceDecl td)
 
-replaceExpr :: Substitution -> Env -> TypedExpr -> TypedExpr
-replaceExpr subst env (te, ty) =
-  let replace (TIntExpr n, ty) = (TIntExpr n, replaceType subst env ty)
-      replace (TRealExpr d, ty) = (TRealExpr d, replaceType subst env ty)
-      replace (TBoolExpr b, ty) = (TBoolExpr b, replaceType subst env ty)
-      replace (TStringExpr s, ty) = (TStringExpr s, replaceType subst env ty)
-      replace (TOrExpr te1 te2, ty) =
-        (TOrExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TAndExpr te1 te2, ty) =
-        (TAndExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TEqExpr te1 te2, ty) =
-        (TEqExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TNeqExpr te1 te2, ty) =
-        (TNeqExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TLtExpr te1 te2, ty) =
-        (TLtExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TGtExpr te1 te2, ty) =
-        (TGtExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TLeExpr te1 te2, ty) =
-        (TLeExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TGeExpr te1 te2, ty) =
-        (TGeExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TAddExpr te1 te2, ty) =
-        (TAddExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TSubExpr te1 te2, ty) =
-        (TSubExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TMultExpr te1 te2, ty) =
-        (TMultExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TDivExpr te1 te2, ty) =
-        (TDivExpr (replace te1) (replace te2), replaceType subst env ty)
-      replace (TUnaryMinusExpr te, ty) =
-        (TUnaryMinusExpr (replace te), replaceType subst env ty)
-      replace (TBangExpr te, ty) =
-        (TBangExpr (replace te), replaceType subst env ty)
-      replace (TCallExpr teFun teArg, ty) =
-        (TCallExpr (replace teFun) (replace teArg), replaceType subst env ty)
-      replace (TListExpr tes, ty) =
-        (TListExpr (List.map replace tes), replaceType subst env ty)
-      replace (TTupleExpr tes, ty) =
-        (TTupleExpr (List.map replace tes), replaceType subst env ty)
-      replace (TRecordExpr fields, ty) =
-        (TRecordExpr (List.map f fields), ty')
-        where f (s, te) = (s, replace te)
-              ty' = replaceType subst env ty
-      replace (TLValue tlve, ty) =
-        (TLValue (replaceLValueExpr subst env tlve), replaceType subst env ty)
+replaceExpr :: TypedExpr -> Infer TypedExpr
+replaceExpr (TIntExpr n, ty) = do
+  ty' <- replaceType ty
+  return (TIntExpr n, ty')
+replaceExpr (TRealExpr d, ty) = do
+  ty' <- replaceType ty
+  return (TRealExpr d, ty')
+replaceExpr (TBoolExpr b, ty) = do
+  ty' <- replaceType ty
+  return (TBoolExpr b, ty')
+replaceExpr (TStringExpr s, ty) = do
+  ty' <- replaceType ty
+  return (TStringExpr s, ty')
+replaceExpr (TOrExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TOrExpr te1' te2', ty')
+replaceExpr (TAndExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TAndExpr te1' te2', ty')
+replaceExpr (TEqExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TEqExpr te1' te2', ty')
+replaceExpr (TNeqExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TNeqExpr te1' te2', ty')
+replaceExpr (TLtExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TLtExpr te1' te2', ty')
+replaceExpr (TGtExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TGtExpr te1' te2', ty')
+replaceExpr (TLeExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TLeExpr te1' te2', ty')
+replaceExpr (TGeExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TGeExpr te1' te2', ty')
+replaceExpr (TAddExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TAddExpr te1' te2', ty')
+replaceExpr (TSubExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TSubExpr te1' te2', ty')
+replaceExpr (TMultExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TMultExpr te1' te2', ty')
+replaceExpr (TDivExpr te1 te2, ty) = do
+  ty' <- replaceType ty
+  te1' <- replaceExpr te1
+  te2' <- replaceExpr te2
+  return (TDivExpr te1' te2', ty')
+replaceExpr (TUnaryMinusExpr te, ty) = do
+  ty' <- replaceType ty
+  te' <- replaceExpr te
+  return (TUnaryMinusExpr te', ty')
+replaceExpr (TBangExpr te, ty) = do
+  ty' <- replaceType ty
+  te' <- replaceExpr te
+  return (TBangExpr te', ty')
+replaceExpr (TCallExpr teFun teArg, ty) = do
+  teFun' <- replaceExpr teFun
+  teArg' <- replaceExpr teArg
+  ty' <- replaceType ty
+  return (TCallExpr teFun' teArg', ty')
+replaceExpr (TListExpr tes, ty) = do
+  tes' <- mapM replaceExpr tes
+  ty' <- replaceType ty
+  return (TListExpr tes', ty')
+replaceExpr (TTupleExpr tes, ty) = do
+  tes' <- mapM replaceExpr tes
+  ty' <- replaceType ty
+  return (TTupleExpr tes', ty')
+replaceExpr (TRecordExpr fields, ty) = do
+  ty' <- replaceType ty
+  let f (s, te) = fmap (s,) (replaceExpr te)
+  fields' <- mapM f fields
+  return (TRecordExpr fields', ty')
+replaceExpr (TLValue tlve, ty) = do
+  tlve' <- replaceLValueExpr tlve
+  ty' <- replaceType ty
+  return (TLValue tlve', ty')
+replaceExpr (TLambdaExpr tmes ts, ty) = do
+  tmes' <- mapM replaceMatchExpr tmes
+  ts' <- replaceStatement ts
+  ty' <- replaceType ty
+  return (TLambdaExpr tmes' ts', ty')
 
-      replace (TLambdaExpr tmes ts, ty) =
-        (TLambdaExpr (List.map (replaceMatchExpr subst env) tmes)
-                    (replaceStatement subst env ts), replaceType subst env ty)
-  in replace (te, ty)
-
-replaceLValueExpr :: Substitution -> Env -> TypedLValueExpr -> TypedLValueExpr
-replaceLValueExpr subst env (tlve, ty) =
-  let replace (TVarExpr s, ty) =
-        let ty' = replaceType subst env ty
-        in (TVarExpr s, ty')
-      replace (TFieldAccessExpr tlve s, ty) =
-        let ty' = replaceType subst env ty
-        in (TFieldAccessExpr (replace tlve) s, ty')
-      replace (TArrayAccessExpr tlve te, ty) =
-        let ty' = replaceType subst env ty
-        in (TArrayAccessExpr (replace tlve) (replaceExpr subst env te), ty')
-  in replace (tlve, ty)
+replaceLValueExpr :: TypedLValueExpr -> Infer TypedLValueExpr
+replaceLValueExpr (TVarExpr s, ty) = do
+  ty' <- replaceType ty
+  return (TVarExpr s, ty')
+replaceLValueExpr (TFieldAccessExpr tlve s, ty) = do
+  ty' <- replaceType ty
+  tlve' <- replaceLValueExpr tlve
+  return (TFieldAccessExpr tlve' s, ty')
+replaceLValueExpr (TArrayAccessExpr tlve te, ty) = do
+  ty' <- replaceType ty
+  tlve' <- replaceLValueExpr tlve
+  te' <- replaceExpr te
+  return (TArrayAccessExpr tlve' te', ty')
