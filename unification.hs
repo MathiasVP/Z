@@ -6,6 +6,7 @@ import Control.Monad
 import Data.Foldable
 import Data.Ord
 import Control.Monad.State.Lazy
+import Z3.Monad
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Maybe
@@ -24,13 +25,13 @@ import TypeUtils
 
 makeRecord :: Bool -> [(String, TType)] -> Infer TType
 makeRecord b fields = do
-  u <- liftIO mkTypeVar
+  u <- liftIO $ mkTypeVar True
   unify u (TRecord b fields)
   return u
 
 unifyTypes :: [TType] -> Infer TType
 unifyTypes types = do
-  t <- liftIO mkTypeVar
+  t <- liftIO $ mkTypeVar True
   foldM unify t types
 
 inserts :: Ord a => Set a -> [a] -> Set a
@@ -40,39 +41,44 @@ unify :: TType -> TType ->  Infer TType
 unify t1 t2 =
   let
     uni :: Trace -> Bindings -> Bindings -> TType -> TType -> Infer TType
-    uni trace bind1 bind2 (TTypeVar u) (TTypeVar u') = do
-      t <- follow (TTypeVar u)
-      t' <- follow (TTypeVar u')
+    uni trace bind1 bind2 (TTypeVar u True) (TTypeVar u' b') = do
+      t <- follow (TTypeVar u True)
+      t' <- follow (TTypeVar u' b')
       case (t, t') of
-        (TTypeVar u, TTypeVar u') -> do
-          modifySubst (Map.insert u (TTypeVar u'))
-          return $ TTypeVar u'
-        (TTypeVar u, t) -> do
+        (TTypeVar u True, TTypeVar u' _) -> do
+          modifySubst (Map.insert u (TTypeVar u' b'))
+          return $ TTypeVar u' b'
+        (TTypeVar u True, t) -> do
           modifySubst (Map.insert u t)
           return t
-        (t, TTypeVar u') -> do
+        (t, TTypeVar u' True) -> do
           modifySubst (Map.insert u' t)
           return t
         (t, t') ->
           uni trace bind1 bind2 t t'
     uni trace bind1 bind2 (TForall u t1) t2 = do
-      t <- liftIO mkTypeVar
+      t <- liftIO $ mkTypeVar False
       uni trace (Map.insert u t bind1) bind2 t1 t2
     uni trace bind1 bind2 t1 (TForall u t2) =
       uni trace bind2 bind1 (TForall u t2) t1
-    uni trace bind1 bind2 (TTypeVar u) t = do
-      follow (TTypeVar u) >>= \case
-        TTypeVar u -> do
+    uni trace bind1 bind2 (TTypeVar u True) t = do
+      follow (TTypeVar u True) >>= \case
+        TTypeVar u True -> do
           modifySubst (Map.insert u t)
           return t
         t' -> do
           t'' <- uni trace bind1 bind2 t t'
           modifySubst (Map.insert u t'')
           return t''
-    uni trace bind1 bind2 t (TTypeVar u) = uni trace bind2 bind1 (TTypeVar u) t
-    uni trace bind1 bind2 (TMu ident1 ty1) (TMu ident2 ty2) = do
-      modifySubst $ Map.insert ident1 (TTypeVar ident2)
-      TMu ident1 <$> (uni trace bind1 bind2 ty1 ty2)
+    uni trace bind1 bind2 t (TTypeVar u True) =
+      follow (TTypeVar u True) >>= \case
+        TTypeVar u _ -> do
+          modifySubst (Map.insert u t)
+          return t
+        t' -> do
+          t'' <- uni trace bind1 bind2 t t'
+          modifySubst (Map.insert u t'')
+          return t''
     uni trace bind1 bind2 (TArray t1) (TArray t2) =
       fmap TArray (uni trace bind1 bind2 t1 t2)
     uni trace bind1 bind2 (TTuple [t1]) (TTuple [t2]) = do
@@ -126,17 +132,17 @@ unify' t1 t2 =
   let
     uni' :: Trace -> Bindings -> Bindings ->
              TType -> TType -> Infer (Maybe TType)
-    uni' trace bind1 bind2 (TTypeVar u) (TTypeVar u') = do
-      t <- follow (TTypeVar u)
-      t' <- follow (TTypeVar u')
+    uni' trace bind1 bind2 (TTypeVar u True) (TTypeVar u' b') = do
+      t <- follow (TTypeVar u True)
+      t' <- follow (TTypeVar u' b')
       case (t, t') of
-        (TTypeVar u, TTypeVar u') -> do
-          modifySubst (Map.insert u (TTypeVar u'))
-          return $ Just (TTypeVar u')
-        (TTypeVar u, t) -> do
+        (TTypeVar u True, TTypeVar u' b') -> do
+          modifySubst (Map.insert u (TTypeVar u' b'))
+          return $ Just (TTypeVar u' b')
+        (TTypeVar u True, t) -> do
           modifySubst (Map.insert u t)
           return $ Just t
-        (t, TTypeVar u') -> do
+        (t, TTypeVar u' True) -> do
           modifySubst (Map.insert u' t)
           return $ Just t
         (t, t') -> uni' trace bind1 bind2 t t'
@@ -144,9 +150,9 @@ unify' t1 t2 =
       uni' trace bind1 bind2 t1 t2
     uni' trace bind1 bind2 t1 (TForall u t2) =
       uni' trace bind2 bind1 (TForall u t2) t1
-    uni' trace bind1 bind2 (TTypeVar u) t =
-      follow (TTypeVar u) >>= \case
-        TTypeVar u -> do
+    uni' trace bind1 bind2 (TTypeVar u True) t =
+      follow (TTypeVar u True) >>= \case
+        TTypeVar u True -> do
           modifySubst (Map.insert u t)
           return $ Just t
         t' -> uni' trace bind1 bind2 t' t >>= \case
@@ -154,11 +160,16 @@ unify' t1 t2 =
                   modifySubst (Map.insert u t'' )
                   return $ Just t''
                 Nothing -> return Nothing
-    uni' trace bind1 bind2 t (TTypeVar u) =
-      uni' trace bind2 bind1 (TTypeVar u) t
-    uni' trace bind1 bind2 t1@(TMu ident1 ty1) t2@(TMu ident2 ty2) = do
-      modifySubst $ Map.insert ident1 (TTypeVar ident2)
-      uni' trace bind1 bind2 ty1 ty2
+    uni' trace bind1 bind2 t (TTypeVar u True) =
+      follow (TTypeVar u True) >>= \case
+        TTypeVar u True -> do
+          modifySubst (Map.insert u t)
+          return $ Just t
+        t' -> uni' trace bind1 bind2 t' t >>= \case
+                Just t'' -> do
+                  modifySubst (Map.insert u t'' )
+                  return $ Just t''
+                Nothing -> return Nothing
     uni' trace bind1 bind2 (TArray t1) (TArray t2) =
       uni' trace bind1 bind2 t1 t2 >>= \case
         Just t -> return . Just $ TArray t
@@ -193,14 +204,14 @@ unify' t1 t2 =
             Nothing -> return Nothing
         Nothing -> return Nothing
     uni' trace bind1 bind2 (TUnion t11 t12) (TUnion t21 t22) = do
-      res1121 <- local $ uni' trace bind1 bind2 t11 t21
-      res1122 <- local $ uni' trace bind1 bind2 t11 t22
+      res1121 <- zLocal $ uni' trace bind1 bind2 t11 t21
+      res1122 <- zLocal $ uni' trace bind1 bind2 t11 t22
       case (res1121, res1122) of
         ((Just t1121, st), _) -> do
           modifySubst (const (subst st))
           modifyEnv (const (env st))
-          res1221 <- local $ uni' trace bind1 bind2 t12 t21
-          res1222 <- local $ uni' trace bind1 bind2 t12 t22
+          res1221 <- zLocal $ uni' trace bind1 bind2 t12 t21
+          res1222 <- zLocal $ uni' trace bind1 bind2 t12 t22
           case (res1221, res1222) of
             ((Just t1221, st), _) -> do
               modifySubst (const (subst st))
@@ -214,8 +225,8 @@ unify' t1 t2 =
         (_, (Just t1122, st)) -> do
           modifySubst (const (subst st))
           modifyEnv (const (env st))
-          res1221 <- local $ uni' trace bind1 bind2 t12 t21
-          res1222 <- local $ uni' trace bind1 bind2 t12 t22
+          res1221 <- zLocal $ uni' trace bind1 bind2 t12 t21
+          res1222 <- zLocal $ uni' trace bind1 bind2 t12 t22
           case (res1221, res1222) of
             ((Just t1221, st), _) -> do
               modifySubst (const (subst st))

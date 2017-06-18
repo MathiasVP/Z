@@ -11,22 +11,23 @@ data TType
   | TStringType
   | TRealType
   | TNumber
-  | TMu Identifier TType
   | TArray TType
   | TTuple [TType]
   | TRecord Bool [(String, TType)]
   | TForall Identifier TType
   | TArrow TType TType
   | TUnion TType TType
-  | TTypeVar Identifier
+  | TTypeVar Identifier Bool -- True: This type variable can be unified with any type variable
+                             -- False: This type variable cannot be unified with other type variables
   | TTypeApp TType TType
   | TRef String
+  | TMu Identifier TType
   | TError
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
-instance Show TType where
-  show ty = render (ppTType ty)
-  
+--instance Show TType where
+--  show ty = render (ppTType ty)
+
 -------------------------------------------------------
 -- Type simplications
 -------------------------------------------------------
@@ -42,8 +43,6 @@ tcontains (TUnion t1 t2) t3
   | otherwise = tcontains t1 t3 || tcontains t1 t3
 tcontains (TArrow t1 t2) (TArrow t3 t4) =
   t1 == t3 && t2 == t4
-tcontains (TMu u1 ty1) (TMu u2 ty2) =
-  u1 == u2 && ty1 == ty2
 tcontains (TArray t1) (TArray t2) =
   t1 == t2
 tcontains (TTuple tys1) (TTuple tys2)
@@ -58,8 +57,11 @@ tcontains (TForall u1 ty1) (TForall u2 ty2)
   | u1 == u2 && ty1 == ty2 = True
   | otherwise = False
 tcontains (TForall _ t1) t2 = tcontains t1 t2
-tcontains (TTypeVar u1) (TTypeVar u2) =
+tcontains (TTypeVar u1 _) (TTypeVar u2 _) =
   u1 == u2
+tcontains (TMu u1 ty1) (TMu u2 ty2)
+  | u1 == u2 && ty1 == ty2 = True
+  | otherwise = False
 tcontains TError TError = True
 tcontains _ _ = False
 
@@ -84,8 +86,6 @@ ppTType TBoolType = text "Bool"
 ppTType TStringType = text "String"
 ppTType TRealType = text "Real"
 ppTType TNumber = text "Number"
-ppTType (TMu ident ty) =
-  text "μ" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType (TArray ty) = brackets $ ppTType ty
 ppTType (TTuple tys) = parens $ commaSep $ List.map ppTType tys
 ppTType (TRecord _ fields) =
@@ -95,7 +95,9 @@ ppTType (TForall ident ty) =
   parens $ text "∀" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType (TArrow ty1 ty2) = ppTType ty1 <+> text "->" <+> ppTType ty2
 ppTType (TUnion ty1 ty2) = ppTType ty1 <+> char '|' <+> ppTType ty2
-ppTType (TTypeVar ident) = ppIdentWithId ident
+ppTType (TTypeVar ident _) = ppIdentWithId ident
 ppTType (TTypeApp ty1 ty2) = parens (ppTType ty1) <+> parens (ppTType ty2)
 ppTType (TRef name) = text name
+ppTType (TMu ident ty) =
+  text "μ" <+> ppIdentWithId ident <> char '.' <+> ppTType ty
 ppTType TError = text "Error"

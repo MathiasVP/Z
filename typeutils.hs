@@ -9,6 +9,7 @@ import Data.Foldable
 import Control.Monad.State.Lazy
 import Prelude hiding (lookup)
 import qualified Data.Map as Map
+import Control.Monad.Writer
 import Data.Map (Map, (!))
 import qualified Data.Set as Set
 import Data.Set(Set)
@@ -27,8 +28,9 @@ data InferSt = InferSt { subst :: Substitution
                        , env :: Env }
 
 emptySt :: InferSt
-emptySt = InferSt { subst = Map.empty
-                  , env = Map.empty }
+emptySt =
+  InferSt { subst = Map.empty
+          , env = Map.empty }
 
 newtype Infer a = Infer (StateT InferSt IO a)
   deriving (Functor, Applicative, Monad, MonadState InferSt, MonadIO)
@@ -74,13 +76,13 @@ equalRecordFields fields1 fields2 =
 follow :: TType -> Infer TType
 follow = fol Set.empty
   where
-    fol visited (TTypeVar ident)
-      | Set.member ident visited = return $ TTypeVar ident
+    fol visited (TTypeVar ident b)
+      | Set.member ident visited = return $ TTypeVar ident b
       | otherwise =
         substitution >>= \subst ->
           case Map.lookup ident subst of
             Just t -> fol (Set.insert ident visited) t
-            Nothing -> return $ TTypeVar ident
+            Nothing -> return $ TTypeVar ident b
     fol visited (TArray ty) = fmap TArray (fol visited ty)
     fol visited (TTuple types) = fmap TTuple (mapM (fol visited) types)
     fol visited (TRecord b fields) =
@@ -100,19 +102,19 @@ follow = fol Set.empty
 free :: TType -> Infer Bool
 free ty =
   follow ty >>= \case
-    TTypeVar _ -> return True
+    TTypeVar {} -> return True
     _          -> return False
 
 makeBindings :: Map Int Identifier -> [TType] -> Bindings
 makeBindings a = Map.fromList . List.zip (List.map snd (Map.toAscList a))
 
 instansiate :: TType -> TType -> TType
-instansiate ty t =
+instansiate t ty =
   let
     inst :: TType -> State (Maybe Identifier) TType
     inst (TForall u ty') =
       get >>= \case
-        Nothing -> modify (const (Just u)) >> TForall u <$> inst ty'
+        Nothing -> modify (const (Just u)) >> inst ty'
         Just _ -> TForall u <$> inst ty'
     inst (TArrow tDom tCod) = TArrow <$> inst tDom <*> inst tCod
     inst (TTypeApp t1 t2) = TTypeApp <$> inst t1 <*> inst t2
@@ -120,12 +122,13 @@ instansiate ty t =
     inst (TTuple tys) = TTuple <$> mapM inst tys
     inst (TRecord b fields) = TRecord b <$> mapM (\(s, ty) -> (s,) <$> inst ty) fields
     inst (TArray ty) = TArray <$> inst ty
-    inst (TTypeVar u) =
+    inst (TTypeVar u b) =
       get >>= \case
-        Nothing -> return $ TTypeVar u
+        Nothing -> return $ TTypeVar u b
         Just u'
           | u == u'   -> return ty
-          | otherwise -> return $ TTypeVar u
+          | otherwise -> return $ TTypeVar u b
+    inst (TMu x ty) = TMu x <$> inst ty
     inst t = return t
   in evalState (inst t) Nothing
 
@@ -136,14 +139,14 @@ lookup bind s = do
     Just (_, ty) -> return ty
     Nothing -> return $ bind ! s
 
-mkTypeVar :: IO TType
-mkTypeVar = TTypeVar <$> fromString "t"
+mkTypeVar :: Bool -> IO TType
+mkTypeVar b = flip TTypeVar b <$> fromString "t"
 
 makeArrow :: [TType] -> TType -> TType
 makeArrow types retTy = List.foldr TArrow retTy types
 
 typevars :: TType -> [Identifier]
-typevars (TTypeVar ident) = [ident]
+typevars (TTypeVar ident _) = [ident]
 typevars (TForall ident ty) =
   if ident `elem` uniques then uniques
   else ident : uniques
@@ -159,8 +162,8 @@ isQuantified :: Identifier -> TType -> Infer Bool
 isQuantified ident = isQuant
   where
     isQuant (TForall ident' ty) = do
-      t' <- follow (TTypeVar ident')
-      t <- follow (TTypeVar ident)
+      t' <- follow (TTypeVar ident' True) -- True / False does not matter here
+      t <- follow (TTypeVar ident True)
       if t == t' then return True else isQuant ty
     isQuant (TArrow t1 t2) = isQuant t1 `or` isQuant t2
     isQuant (TUnion t1 t2) = isQuant t1 `or` isQuant t2
@@ -172,21 +175,20 @@ isQuantified ident = isQuant
 
 rename :: Identifier -> Identifier -> TType -> TType
 rename new old ty =
-  let re (TMu u ty) = TMu u (re ty)
-      re (TForall u ty) = TForall u (re ty)
+  let re (TForall u ty) = TForall u (re ty)
       re (TArrow tDom tCod) = TArrow (re tDom) (re tCod)
       re (TUnion t1 t2) = tunion (re t1) (re t2)
       re (TTuple tys) = TTuple (List.map re tys)
       re (TRecord b fields) = TRecord b (List.map (second re) fields)
       re (TArray ty) = TArray (re ty)
-      re (TTypeVar ident)
-        | ident == old = TTypeVar new
-        | otherwise = TTypeVar ident
+      re (TTypeVar ident b)
+        | ident == old = TTypeVar new b
+        | otherwise = TTypeVar ident b
       re t = t
   in re ty
 
-local :: Infer a -> Infer (a, InferSt)
-local infer =
+zLocal :: Infer a -> Infer (a, InferSt)
+zLocal infer =
   do st <- get
      r <- infer
      st' <- get
@@ -199,9 +201,9 @@ makeForall ty1 ty2 = do
   foldrM make ty2 (typevars ty1')
   where make u ty = do
           isquant <- isQuantified u ty
-          isfree <- free (TTypeVar u)
+          isfree <- free (TTypeVar u True) -- True / False does not matter here
           if isquant || not isfree then follow ty
           else do
-            TTypeVar u' <- liftIO mkTypeVar
+            TTypeVar u' _ <- liftIO $ mkTypeVar True
             ty' <- follow ty
             return $ TForall u' (rename u' u ty')

@@ -120,8 +120,8 @@ instance Lattice TypeCost where
 
 
 subtype :: TType -> TType -> Infer (Maybe TType)
-subtype t1 t2 =
-  let
+subtype t1 t2 = undefined
+  {-let
     updateOrElse f def k map =
       case Map.lookup k map of
         Just a -> Map.insert k (f a) map
@@ -130,34 +130,31 @@ subtype t1 t2 =
     sub :: Map Identifier Int -> Bindings -> Bindings ->
                TType -> TType -> Infer (TypeCost, TType)
     sub trace bind1 bind2 (TForall u t1) t2 =
-      do TTypeVar u' <- liftIO mkTypeVar
+      do TTypeVar u' False <- liftIO $ mkTypeVar False
          (c, t) <- sub trace bind1 bind2 (rename u' u t1) t2
-         free (TTypeVar u') >>= \case
+         free (TTypeVar u' False) >>= \case
           True -> return (c, t)
           False -> return (c, TForall u' t) {- TODO: This doesn't really make sense? -}
     sub trace bind1 bind2 t1 (TForall u t2) =
-      do TTypeVar u' <- liftIO mkTypeVar
+      do TTypeVar u' False <- liftIO $ mkTypeVar False
          (c, t) <- sub trace bind1 bind2 t1 (rename u' u t2)
-         free (TTypeVar u') >>= \case
+         free (TTypeVar u' False) >>= \case
           True -> return (c, TForall u' t)
           False -> return (c, t)
-    sub trace bind1 bind2 t1 t2@(TTypeVar _) =
+    sub trace bind1 bind2 t1 t2@(TTypeVar _ True) =
       follow t2 >>= \case
-        TTypeVar u -> do
+        TTypeVar u True -> do
           t1' <- follow t1
           modifySubst (Map.insert u t1')
-          return (Cost 1, TTypeVar u)
+          return (Cost 1, TTypeVar u True)
         ty -> sub trace bind1 bind2 t1 ty
-    sub trace bind1 bind2 t1@(TTypeVar _) t2 =
+    sub trace bind1 bind2 t1@(TTypeVar _ True) t2 =
       follow t1 >>= \case
-        TTypeVar u -> do
+        TTypeVar u True -> do
           t2' <- follow t2
           modifySubst (Map.insert u t2')
-          return (Cost 1, TTypeVar u)
+          return (Cost 1, TTypeVar u True)
         ty -> sub trace bind1 bind2 ty t2
-    sub trace bind1 bind2 (TMu ident1 ty1) (TMu ident2 ty2) = error "TODO"
-    sub trace bind1 bind2 (TMu s ty1) ty2 = error "TODO"
-    sub trace bind1 bind2 ty1 (TMu ident ty2) = error "TODO"
     sub trace bind1 bind2 (TUnion t11 t12) (TUnion t21 t22) = do
       let poss =
             [(sub trace bind1 bind2 t11 t21, sub trace bind1 bind2 t12 t21),
@@ -165,7 +162,7 @@ subtype t1 t2 =
              (sub trace bind1 bind2 t11 t22, sub trace bind1 bind2 t12 t21),
              (sub trace bind1 bind2 t11 t22, sub trace bind1 bind2 t12 t22)]
       st <- get
-      Just (inl, inr) <- liftIO $ minimumOnM (\(inl, inr) -> do
+      Just (inl, inr) <- _ $ minimumOnM (\(inl, inr) -> do
                 ((c1, _), st') <- runInfer inl st
                 ((c2, _), _) <- runInfer inr st'
                 return $ c1 \/ c2) poss
@@ -223,4 +220,4 @@ subtype t1 t2 =
   in sub Map.empty Map.empty Map.empty t1 t2 >>= \case
        (Free, t) -> return $ Just t
        (Cost _, t) -> return $ Just t
-       (Impossible, _) -> return Nothing
+       (Impossible, _) -> return Nothing-}

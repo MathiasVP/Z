@@ -14,17 +14,14 @@ import qualified Data.Set as Set
 import Hash
 import Data.Map()
 
-replaceTypeHelper :: TType -> Maybe String -> Infer TType
-replaceTypeHelper ty mself = do
+replaceType :: TType -> Infer TType
+replaceType ty = do
   let replace :: Trace -> TType -> StateT (Maybe Identifier) Infer TType
       replace _ TIntType = return TIntType
       replace _ TNumber = return TNumber
       replace _ TBoolType = return TBoolType
       replace _ TStringType = return TStringType
       replace _ TRealType = return TRealType
-      replace trace (TMu ident ty) = do
-        ty' <- replace trace ty
-        return $ TMu ident ty'
       replace trace (TArray ty) = do
         ty' <- replace trace ty
         return $ TArray ty'
@@ -44,38 +41,29 @@ replaceTypeHelper ty mself = do
         t1' <- replace trace t1
         t2' <- replace trace t2
         return $ TUnion t1' t2'
+      replace trace (TMu ident ty) =
+        TMu ident <$> replace trace ty
       replace trace (TRef name) =
         Map.lookup name <$> lift environment >>= \case
-          Just (_, TRef s)
-            | Just s == mself ->
-              do x <- liftIO $ fromString "X"
-                 modify $ const (Just x)
-                 return (TTypeVar x)
-            | otherwise -> replace trace (TRef s)
           Just (_, t) -> return t
           Nothing -> error $ "Undefined type name " ++ name
       replace trace (TForall ident ty) = do
         ty' <- replace trace ty
         return $ TForall ident ty'
-      replace trace (TTypeVar ident)
-        | Set.member ident trace = return $ TTypeVar ident
+      replace trace (TTypeVar ident b)
+        | Set.member ident trace = return $ TTypeVar ident b
         | otherwise = do
           subst <- lift substitution
           case Map.lookup ident subst of
             Just ty -> replace (Set.insert ident trace) ty
-            Nothing -> return $ TTypeVar ident
+            Nothing -> return $ TTypeVar ident b
       replace trace (TTypeApp t1 t2) = do
         t1' <- replace trace t1
         t2' <- replace trace t2
         return $ TTypeApp t1' t2'
       replace _ TError = return TError
   do (ty', mself) <- runStateT (replace Set.empty ty) Nothing
-     case mself of
-       Just self -> return $ TMu self ty'
-       Nothing -> return ty'
-
-replaceType :: TType -> Infer TType
-replaceType = flip replaceTypeHelper Nothing
+     return ty'
 
 replaceDecl :: TypedDecl -> Infer TypedDecl
 replaceDecl (ident, td) = fmap (ident, ) (replaceDeclData ident td)
@@ -84,7 +72,7 @@ replaceDeclData :: Identifier -> TypedDeclData -> Infer TypedDeclData
 replaceDeclData ident td =
   case td of
     TTypeDecl t -> do
-      t' <- replaceTypeHelper t (Just (stringOf ident))
+      t' <- replaceType t
       modifyEnv $ Map.update (Just . second (const t')) (stringOf ident)
       return $ TTypeDecl t'
     TFunDecl args ty s -> do
