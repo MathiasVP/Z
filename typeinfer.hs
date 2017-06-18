@@ -123,7 +123,7 @@ transTy RealType = return TRealType
 transTy (Name name tys) =
   Map.lookup name <$> environment >>= \case
     Nothing -> error $ "Undefined type named '" ++ name ++ "''"
-    Just (_, ty) -> foldr instansiate ty <$> mapM transTy tys
+    Just (_, ty) -> foldr instantiate ty <$> mapM transTy tys
 transTy (Array ty) = TArray <$> transTy ty
 transTy (Tuple tys) = TTuple <$> mapM transTy tys
 transTy (Record b fields) = TRecord b <$> mapM (\(name, ty) ->
@@ -179,8 +179,8 @@ transNewType (self, x) idents ty = do
 inferDecl :: Decl -> Infer TypedDecl
 inferDecl (TypeDecl name targs ty) = do
   let
-    replace' :: String -> TType -> TType -> TType
-    replace' s ty' ty =
+    replace :: String -> TType -> TType -> TType
+    replace s ty' ty =
       let
         rep TIntType = TIntType
         rep TBoolType = TBoolType
@@ -202,6 +202,30 @@ inferDecl (TypeDecl name targs ty) = do
           | otherwise = TRef name
         rep TError = TError
       in rep ty
+
+    simplify :: TType -> TType
+    simplify ty =
+      let
+        simpl TIntType = TIntType
+        simpl TBoolType = TBoolType
+        simpl TStringType = TStringType
+        simpl TRealType = TRealType
+        simpl TNumber = TNumber
+        simpl (TArray ty) = TArray $ simpl ty
+        simpl (TTuple tys) = TTuple $ List.map simpl tys
+        simpl (TRecord b fields) =
+          TRecord b $ List.map (second simpl) fields
+        simpl (TForall ident ty) = TForall ident $ simpl ty
+        simpl (TArrow ty1 ty2) = TArrow (simpl ty1) (simpl ty2)
+        simpl (TUnion ty1 ty2) = TUnion (simpl ty1) (simpl ty2)
+        simpl (TTypeVar ident b) = TTypeVar ident b
+        simpl (TMu ident ty) = TMu ident (simpl ty)
+        simpl (TTypeApp (TMu ident ty1) ty2) = TMu ident (simpl $ TTypeApp ty1 ty2)
+        simpl (TTypeApp (TForall u ty1) ty2) = instantiate (TForall u $ simpl ty1) (simpl ty2)
+        simpl (TTypeApp ty1 ty2) = TTypeApp (simpl ty1) (simpl ty2)
+        simpl (TRef name) = TRef name
+        simpl TError = TError
+      in simpl ty
   targs' <- liftIO $ mapM fromString targs
   name' <- Map.lookup name <$> environment >>= \case
              Just (u, _) -> return $ Identifier (name, u)
@@ -209,9 +233,12 @@ inferDecl (TypeDecl name targs ty) = do
   x <- liftIO $ fromString "X"
   modifyEnv (Map.insert name (idOf name', TTypeVar x True))
   ty' <- transNewType (name, x) (Map.fromList $ List.map unIdentifier targs') ty
-  modifyEnv (Map.insert name (idOf name', ty'))
-  modifyEnv (Map.mapWithKey (\ident (uniq, ty) -> (uniq, replace' name ty' ty)))
-  return (name', TTypeDecl ty')
+  liftIO $ print $ ppTType ty'
+  let ty'' = simplify ty'
+  liftIO $ print $ ppTType ty''
+  modifyEnv (Map.insert name (idOf name', ty''))
+  modifyEnv (Map.mapWithKey (\ident (uniq, ty) -> (uniq, replace name ty'' ty)))
+  return (name', TTypeDecl ty'')
 
 inferDecl (FunDecl name tyArgs args retTy statement) = do
   tyArgs' <- liftIO $ mapM fromString tyArgs

@@ -108,8 +108,8 @@ free ty =
 makeBindings :: Map Int Identifier -> [TType] -> Bindings
 makeBindings a = Map.fromList . List.zip (List.map snd (Map.toAscList a))
 
-instansiate :: TType -> TType -> TType
-instansiate t ty =
+instantiate :: TType -> TType -> TType
+instantiate t ty =
   let
     inst :: TType -> State (Maybe Identifier) TType
     inst (TForall u ty') =
@@ -117,8 +117,11 @@ instansiate t ty =
         Nothing -> modify (const (Just u)) >> inst ty'
         Just _ -> TForall u <$> inst ty'
     inst (TArrow tDom tCod) = TArrow <$> inst tDom <*> inst tCod
-    inst (TTypeApp t1 t2) = TTypeApp <$> inst t1 <*> inst t2
-    inst (TUnion t1 t2) = tunion <$> inst t1 <*> inst t2
+    inst (TTypeApp t1 t2) = do
+      t1' <- inst t1
+      t2' <- inst t2
+      return $ TTypeApp t1' t2'
+    inst (TUnion t1 t2) = TUnion <$> inst t1 <*> inst t2
     inst (TTuple tys) = TTuple <$> mapM inst tys
     inst (TRecord b fields) = TRecord b <$> mapM (\(s, ty) -> (s,) <$> inst ty) fields
     inst (TArray ty) = TArray <$> inst ty
